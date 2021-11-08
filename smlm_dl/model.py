@@ -171,12 +171,12 @@ class Template2DRenderer(BaseRendererModel):
                                                  ]),                                   
                                    [0,
                                     0,],
-                                   [0.75 * img_size[0],
-                                    0.75 * img_size[1],],
+                                   [1 * img_size[0],
+                                    1 * img_size[1],],
                           )
         
-        xs = torch.linspace(-4, 4, self.img_size[0]*1)
-        ys = torch.linspace(-4, 4, self.img_size[0]*1)
+        xs = torch.linspace(-4, 4, self.img_size[0]*2)
+        ys = torch.linspace(-4, 4, self.img_size[0]*2)
         xs, ys = torch.meshgrid(xs, ys, indexing='ij')
         # r = torch.sqrt(xs**2+ys**2)
         # self.template = ParameterModule(torch.clip(1-r, min=0))        
@@ -193,15 +193,15 @@ class Template2DRenderer(BaseRendererModel):
         # self.template.init_tensor()
         self.pooling = nn.AvgPool2d((2,2))
         
-        kx = torch.fft.fftfreq(self.img_size[0]*4*1)
-        ky = torch.fft.fftfreq(self.img_size[1]*4*1)
+        kx = torch.fft.fftfreq(self.img_size[0]*2*2)
+        ky = torch.fft.fftfreq(self.img_size[1]*2*2)
         self.kx, self.ky = torch.meshgrid(kx, ky, indexing='ij')
     
     def render_images(self, params, as_numpy_arr=False):
         template = self.template(None)
         template = self.template_render(template)
         
-        template = nn.functional.pad(template, (int(1.5*template.shape[0]),)*2 + (int(1.5*template.shape[1]),)*2)
+        template = nn.functional.pad(template.unsqueeze(0), (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2, mode='replicate')[0]
         template_fft = torch.fft.fft2(template)
         # template_fft = torch.fft.fftshift(template)
         
@@ -212,10 +212,11 @@ class Template2DRenderer(BaseRendererModel):
         # shifted_template = torch.fft.fftshift(shifted_template)
         
         shifted_template = shifted_template[:,:,
-                                            int(0.375*template.shape[0]):-int(0.375*template.shape[0]),
-                                            int(0.375*template.shape[1]):-int(0.375*template.shape[1]),
+                                            int(0.25*template.shape[0]):-int(0.25*template.shape[0]),
+                                            int(0.25*template.shape[1]):-int(0.25*template.shape[1]),
                                            ]
         # print(shifted_template.shape)
+        shifted_template = self.pooling(shifted_template)
         
         if as_numpy_arr:
             shifted_template = shifted_template.detach().numpy()
@@ -224,8 +225,8 @@ class Template2DRenderer(BaseRendererModel):
     
     def render_example_images(self, num):        
         params = torch.rand((num, self.n_params, 1, 1))
-        params[:,0] = 2 * (params[:,0] - 0.5) * 0.75 * self.img_size[0]
-        params[:,1] = 2 * (params[:,1] - 0.5) * 0.75 * self.img_size[1]
+        params[:,0] = 2 * (params[:,0] - 0.5) * 1 * self.img_size[0]
+        params[:,1] = 2 * (params[:,1] - 0.5) * 1 * self.img_size[1]
         images = self.render_images(params, True)
         return images
     

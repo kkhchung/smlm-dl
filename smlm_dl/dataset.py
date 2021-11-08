@@ -10,8 +10,8 @@ class SimulatedPSFDataset(Dataset):
     def __init__(self, size=(32, 32), length=512, psf_params={'A':[500,2000], 'bg':[0,100]}, noise_params={'poisson':True, 'gaussian':100}, *args, **kwargs):
         Dataset.__init__(self)
         
-        self.shifts = np.stack([np.random.uniform(-size[0]//2, size[0]//2, length),
-                                np.random.uniform(-size[1]//2, size[1]//2, length),
+        self.shifts = np.stack([np.random.uniform(-size[0]/3, size[0]/3, length),
+                                np.random.uniform(-size[1]/3, size[1]/3, length),
                                 ], axis=-1)
         
         psfs = self.generate_psfs(size, length, self.shifts, psf_params, **kwargs) #assumes normalized from 0 to 1

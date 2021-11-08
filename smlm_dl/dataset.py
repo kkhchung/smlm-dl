@@ -30,6 +30,7 @@ class SimulatedPSFDataset(Dataset):
             
         psfs = psfs * np.random.uniform(A[0], A[1], length)[:, None, None]
         psfs = psfs + np.random.uniform(bg[0], bg[1], length)[:, None, None]
+        # print(psfs.dtype)
         
         if len(noise_params) > 0:
             psfs = self.add_noise(psfs, noise_params)
@@ -37,7 +38,7 @@ class SimulatedPSFDataset(Dataset):
         psfs -= psfs.min(axis=(1,2), keepdims=True)
         psfs /= psfs.max(axis=(1,2), keepdims=True)
             
-        self.psfs = psfs
+        self.psfs = psfs.astype(np.float32)[:, None, ...]
         
     def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):
         # return np.random.uniform(0, 1, (length,) + size)
@@ -66,10 +67,9 @@ class Gaussian2DPSFDataset(SimulatedPSFDataset):
     def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):
         xs = np.arange(0, size[0]) - 0.5*(size[0]-1)
         ys = np.arange(0, size[1]) - 0.5*(size[1]-1)
-        # print(xs, ys)
         XS, YS = np.meshgrid(xs, ys, indexing='ij')
         # print(shifts.shape)
-        (XS[None,...]-shifts[:,0,None,None])**2
+        # print(psf_params['sig_x'].dtype)
         ret = np.exp(-((XS[None,...]-shifts[:,0,None,None])**2/(2*np.random.uniform(*psf_params['sig_x'], (length, 1,1))) \
                        + (YS[None,...]-shifts[:,1,None,None])**2/(2*np.random.uniform(*psf_params['sig_x'], (length, 1,1)))))
         ret -= ret.min(axis=(1,2), keepdims=True)
@@ -156,7 +156,7 @@ def inspect_psfs(psf_dataset, indices=None):
         indices = np.random.choice(psf_dataset.psfs.shape[0], 5, replace=False)
     fig, axes = plt.subplots(1, len(indices), figsize=(4*len(indices), 3))
     for i, val in enumerate(indices):
-        im = axes[i].imshow(psf_dataset.psfs[val])
+        im = axes[i].imshow(psf_dataset.psfs[val, 0])
         plt.colorbar(im, ax=axes[i])
         axes[i].set_title("id: {}".format(val))
     if hasattr(psf_dataset, 'pupil'):

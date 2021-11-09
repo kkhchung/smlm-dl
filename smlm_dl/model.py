@@ -116,17 +116,18 @@ class Gaussian2DRenderer(BaseRendererModel):
                                     0.75 * img_size[1],
                                     0.125 * 0.5 * sum(img_size),],
                                   )
-    
-    def render_images(self, params, as_numpy_arr=False):
+        
         xs = torch.arange(0, self.img_size[0]) - 0.5*(self.img_size[0]-1)
         ys = torch.arange(0, self.img_size[1]) - 0.5*(self.img_size[1]-1)
-        XS, YS = torch.meshgrid(xs, ys, indexing='ij')
+        self.XS, self.YS = torch.meshgrid(xs, ys, indexing='ij')
+    
+    def render_images(self, params, as_numpy_arr=False):
 
         # images = torch.exp(-((XS[None,...]-params[:,[0]]*0.5*self.img_size[0])**2/(0.25*self.img_size[0]*(params[:,[2]]+1)) \
         #                + (YS[None,...]-params[:,[1]]*0.5*self.img_size[1])**2/(0.25*self.img_size[0]*(params[:,[2]]+1))))
         
-        images = torch.exp(-((XS[None,...]-params[:,[0]])**2/params[:,[2]] \
-                       + (YS[None,...]-params[:,[1]])**2/params[:,[2]]))
+        images = torch.exp(-((self.XS[None,...]-params[:,[0]])**2/params[:,[2]] \
+                       + (self.YS[None,...]-params[:,[1]])**2/params[:,[2]]))
         
         images = images - torch.amin(images, dim=(2,3), keepdims=True)
         images = images / torch.amax(images, dim=(2,3), keepdims=True)
@@ -241,8 +242,9 @@ class FourierOptics2DModel(EncoderModel):
         return x
     
     def get_suppl(self):
-        pupil = self.renderer.pupil.parameter.detach().numpy()
-        return {'pupil mag':np.abs(pupil), 'pupil phase':np.angle(pupil)}
+        pupil_magnitude = self.renderer.pupil_magnitude.parameter.detach().numpy() * self.renderer.hann_window.detach().numpy()
+        pupil_phase = self.renderer.pupil_phase.parameter.detach().numpy()
+        return {'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase}
 
 class FourierOptics2DRenderer(BaseRendererModel):
     def __init__(self, img_size):
@@ -252,33 +254,45 @@ class FourierOptics2DRenderer(BaseRendererModel):
                                                  ]),                                   
                                    [0,
                                     0,],
-                                   [0.75 * img_size[0],
-                                    0.75 * img_size[1],],
+                                   [0.5 * img_size[0],
+                                    0.5 * img_size[1],],
                                   )
         
-        kx = torch.fft.fftfreq(self.img_size[0]*4)
-        ky = torch.fft.fftfreq(self.img_size[1]*4)
+        kx = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[0]))
+        ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]))
         self.kx, self.ky = torch.meshgrid(kx, ky, indexing='ij')
         
-        xs = torch.linspace(-1.5, 1.5, self.img_size[0])
-        ys = torch.linspace(-1.5, 1.5, self.img_size[0])
+        xs = torch.linspace(-1., 1., self.img_size[0])
+        ys = torch.linspace(-1., 1., self.img_size[0])
         xs, ys = torch.meshgrid(xs, ys, indexing='ij')
         r = torch.sqrt(xs**2+ys**2)
-        self.pupil = ParameterModule((r<=1).type(torch.cfloat))
-        # self.pupil = ParameterModule(torch.ones((self.img_size[0], self.img_size[1]), dtype=torch.cfloat))        
+        hann_window = torch.cos(r)**2 * (r<=1)
+        self.hann_window = hann_window
+        
+        self.pupil_magnitude = ParameterModule(torch.ones((self.img_size[0], self.img_size[1])))
+        self.pupil_magnitude_act = nn.ReLU()
+        self.pupil_phase = ParameterModule(torch.zeros((self.img_size[0], self.img_size[1])))
+        self.pupil_phase_act = nn.Tanh()
     
     def render_images(self, params, as_numpy_arr=False):
-        pupil = self.pupil(None)
-        pupil = nn.functional.pad(pupil, (int(1.5*pupil.shape[0]),)*2 + (int(1.5*pupil.shape[1]),)*2)
         
-        pupil = torch.fft.fftshift(pupil)
+        pupil_magnitude = self.pupil_magnitude_act(self.pupil_magnitude(None))
+        pupil_magnitude = pupil_magnitude * self.hann_window
         
-        # shifted_pupil = pupil[None,...]*torch.exp(-2j*np.pi*(self.kx*params[:,[0]]*0.5*self.img_size[0] + self.ky*params[:,[1]]*0.5*self.img_size[1]))
-        shifted_pupil = pupil[None,...]*torch.exp(-2j*np.pi*(self.kx*params[:,[0]] + self.ky*params[:,[1]]))
+        pupil_phase = self.pupil_phase_act(self.pupil_phase(None)) * np.pi
+        pupil_phase = pupil_phase[None,...] * torch.ones(params.shape[0])[:,None,None,None]
         
-        images = torch.fft.fftshift(torch.abs(torch.fft.fft2(shifted_pupil))**2)
-        images = images[:,:,int(0.375*images.shape[2]):-int(0.375*images.shape[3]),
-                 int(0.375*images.shape[2]):-int(0.375*images.shape[3])]
+        pupil_phase = pupil_phase - np.pi * (self.kx[None,...] * params[:, [0]])
+        pupil_phase = pupil_phase - np.pi * (self.ky[None,...] * params[:, [1]])
+        
+        pupil = pupil_magnitude[None,None,...] * torch.exp(1j * pupil_phase)
+        pupil = nn.functional.pad(pupil, (int(1.5*pupil.shape[2]),)*2 + (int(1.5*pupil.shape[3]),)*2, mode='constant')
+
+        shifted_pupil = torch.fft.ifftshift(pupil)
+               
+        images = torch.fft.ifftshift(torch.abs(torch.fft.ifft2(shifted_pupil))**2)
+        images = images[:,:,int(0.375*images.shape[2]):-int(0.375*images.shape[2]),
+                 int(0.375*images.shape[3]):-int(0.375*images.shape[3])]
         
         images = images - torch.amin(images, dim=(2,3), keepdims=True)
         images = images / torch.amax(images, dim=(2,3), keepdims=True)
@@ -290,8 +304,8 @@ class FourierOptics2DRenderer(BaseRendererModel):
     
     def render_example_images(self, num):        
         params = torch.rand((num, self.n_params, 1, 1))
-        params[:,0] = 2 * (params[:,0] - 0.5) * 0.75 * self.img_size[0]
-        params[:,1] = 2 * (params[:,1] - 0.5) * 0.75 * self.img_size[1]
+        params[:,0] = 2 * (params[:,0] - 0.5) * 0.5 * self.img_size[0]
+        params[:,1] = 2 * (params[:,1] - 0.5) * 0.5 * self.img_size[1]
         images = self.render_images(params, True)
         return images
     
@@ -343,5 +357,11 @@ def check_model(model, dataloader):
         fig, axes = plt.subplots(1, len(example_images), figsize=(4*len(example_images), 3), squeeze=False)
         for i, img in enumerate(example_images):
             im = axes[0, i].imshow(img[0])
+            plt.colorbar(im, ax=axes[0, i])
+            axes[0, i].set_title("E.g. {}".format(i))
+            
+        fig, axes = plt.subplots(1, len(example_images), figsize=(4*len(example_images), 3), squeeze=False)
+        for i, img in enumerate(example_images):
+            im = axes[0, i].imshow(np.log10(img[0]))
             plt.colorbar(im, ax=axes[0, i])
             axes[0, i].set_title("E.g. {}".format(i))

@@ -39,7 +39,7 @@ class FittingTrainer(object):
         self.model.to(self.device)
         self.model.train()
         
-        print("-"*100)
+        # print("-"*100)
         print("Starting training Epoch # {}".format(epoch_i))
         
         for batch_i, (x, y) in enumerate(self.train_data_loader):
@@ -66,13 +66,14 @@ class FittingTrainer(object):
                     tb_logger.add_images("Training/data", x.detach()[:tb_log_limit_images], n_iter)
                     tb_logger.add_images("Training/pred", pred.detach()[:tb_log_limit_images], n_iter)
                     
-                    suppls_dict = self.model.get_suppl()
-                    for i, (key, val) in enumerate(suppls_dict.items()):
-                        tb_logger.add_image("Training/{}".format(key), val, n_iter, dataformats="HW")
+                    if hasattr(self.model, 'get_suppl'):
+                        suppls_dict = self.model.get_suppl()
+                        for i, (key, val) in enumerate(suppls_dict.items()):
+                            tb_logger.add_image("Training/{}".format(key), val, n_iter, dataformats="HW")
                 
-        print("-"*100)
+        # print("-"*100)
                 
-    def validate(self, n_iter=0, tb_logger=None):
+    def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=16):
         self.model.to(self.device)
         self.model.eval()
         
@@ -92,12 +93,13 @@ class FittingTrainer(object):
         
         if not tb_logger is None:
             tb_logger.add_scalar("Validate/Loss", loss, n_iter) # avg loss
-            tb_logger.add_images("Validate/data", x.detach(), n_iter) # only images of the last batch
-            tb_logger.add_images("Validate/pred", pred.detach(), n_iter) # only images of the last batch
+            tb_logger.add_images("Validate/data", x.detach()[:tb_log_limit_images], n_iter) # only images of the last batch
+            tb_logger.add_images("Validate/pred", pred.detach()[:tb_log_limit_images], n_iter) # only images of the last batch
             
-            suppls_dict = self.model.get_suppl()
-            for i, (key, val) in enumerate(suppls_dict.items()):
-                tb_logger.add_image("Validate/{}".format(key), val, n_iter, dataformats="HW")
+            if hasattr(self.model, 'get_suppl'):
+                suppls_dict = self.model.get_suppl()
+                for i, (key, val) in enumerate(suppls_dict.items()):
+                    tb_logger.add_image("Validate/{}".format(key), val, n_iter, dataformats="HW")
         
     def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=SummaryWriter()):
         """

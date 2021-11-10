@@ -7,7 +7,7 @@ class SimulatedPSFDataset(Dataset):
     """
     Base class.
     """
-    def __init__(self, size=(32, 32), length=512, psf_params={'A':[500,2000], 'bg':[0,100]}, noise_params={'poisson':True, 'gaussian':100}, *args, **kwargs):
+    def __init__(self, size=(32, 32), length=512, psf_params={'A':[500,2000], 'bg':[0,100]}, noise_params={'poisson':True, 'gaussian':100}, normalize=True, *args, **kwargs):
         Dataset.__init__(self)
         
         self.shifts = np.stack([np.random.uniform(-size[0]/3, size[0]/3, length),
@@ -26,17 +26,18 @@ class SimulatedPSFDataset(Dataset):
             print("psf bg defaulting to [0, 100]")
             bg = [0, 100]
         else:
-            bg = psf_params['A']
-            
+            bg = psf_params['bg']
+        
         psfs = psfs * np.random.uniform(A[0], A[1], length)[:, None, None]
         psfs = psfs + np.random.uniform(bg[0], bg[1], length)[:, None, None]
         # print(psfs.dtype)
         
         if len(noise_params) > 0:
             psfs = self.add_noise(psfs, noise_params)
-            
-        psfs -= psfs.min(axis=(1,2), keepdims=True)
-        psfs /= psfs.max(axis=(1,2), keepdims=True)
+
+        if normalize:
+            psfs -= psfs.min(axis=(1,2), keepdims=True)
+            psfs /= psfs.max(axis=(1,2), keepdims=True)
             
         self.psfs = psfs.astype(np.float32)[:, None, ...]
         

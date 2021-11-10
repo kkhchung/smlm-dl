@@ -14,7 +14,7 @@ class SimulatedPSFDataset(Dataset):
                                 np.random.uniform(-size[1]/3, size[1]/3, length),
                                 ], axis=-1)
         
-        psfs = self.generate_psfs(size, length, self.shifts, psf_params, **kwargs) #assumes normalized from 0 to 1
+        psfs = self.generate_psfs(size, length, self.shifts, psf_params, *args, **kwargs) #assumes normalized from 0 to 1
         
         if not 'A' in psf_params:
             print("psf amplitude defaulting to [500, 2000]")
@@ -88,7 +88,7 @@ class FourierOptics2DPSFDataset(SimulatedPSFDataset):
         ky = np.fft.fftfreq(4*size[1])
         self.kx, self.ky = np.meshgrid(kx, ky, indexing='ij')
         
-        SimulatedPSFDataset.__init__(self, size, length, psf_params, noise_params, **{"psf_zerns":psf_zerns})
+        SimulatedPSFDataset.__init__(self, size, length, psf_params, noise_params, psf_zerns=psf_zerns, *args, **kwargs)
         
         
     def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):

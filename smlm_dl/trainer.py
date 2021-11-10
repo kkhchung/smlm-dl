@@ -8,10 +8,11 @@ from functools import partial
 class FittingTrainer(object):
     _default_optimizer = partial(torch.optim.Adam, lr=1e-4)    
     
-    def __init__(self, model, data_loader, optimizer=None, loss_function=nn.MSELoss(), try_cuda=True):
+    def __init__(self, model, train_data_loader, valid_data_loader=None, optimizer=None, loss_function=nn.MSELoss(), try_cuda=True):
         
         self.model = model
-        self.data_loader = data_loader
+        self.train_data_loader = train_data_loader
+        self.valid_data_loader = valid_data_loader
         
         if optimizer is None:
             self.optimizer = self._default_optimizer(model.parameters())
@@ -34,14 +35,14 @@ class FittingTrainer(object):
             self.device = torch.device('cpu')
         print("Device: {}".format(self.device))
         
-    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None):
+    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=16):
         self.model.to(self.device)
         self.model.train()
         
         print("-"*100)
         print("Starting training Epoch # {}".format(epoch_i))
         
-        for batch_i, (x, y) in enumerate(self.data_loader):
+        for batch_i, (x, y) in enumerate(self.train_data_loader):
             x = x.to(self.device)
             # y = y.to(self.device)
             
@@ -53,17 +54,21 @@ class FittingTrainer(object):
             loss.backward()
             self.optimizer.step()
             
-            if ((batch_i+1) % log_interval == 0) or ((batch_i+1)==len(self.data_loader)):
+            if ((batch_i+1) % log_interval == 0) or ((batch_i+1)==len(self.train_data_loader)):
                 print("Epoch # {}, Batch # {} ({}/{}), loss = {:.6f}".format(epoch_i, batch_i,
-                                                                     self.data_loader.batch_size * (batch_i+1),
-                                                                     len(self.data_loader.dataset),
+                                                                     self.train_data_loader.batch_size * (batch_i+1),
+                                                                     len(self.train_data_loader.dataset),
                                                                      loss))
                 
                 if not tb_logger is None:
-                    n_iter = epoch_i * len(self.data_loader) + batch_i + 1
+                    n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
                     tb_logger.add_scalar("Training/loss", loss, n_iter)
-                    tb_logger.add_images("Training/data", x.detach(), n_iter)
-                    tb_logger.add_images("Training/pred", pred.detach(), n_iter)
+                    tb_logger.add_images("Training/data", x.detach()[:tb_log_limit_images], n_iter)
+                    tb_logger.add_images("Training/pred", pred.detach()[:tb_log_limit_images], n_iter)
+                    
+                    suppls_dict = self.model.get_suppl()
+                    for i, (key, val) in enumerate(suppls_dict.items()):
+                        tb_logger.add_image("Training/{}".format(key), val, n_iter, dataformats="HW")
                 
         print("-"*100)
                 
@@ -74,12 +79,12 @@ class FittingTrainer(object):
         sum_loss = 0
         
         with torch.no_grad():
-            for batch_i, (x, y) in enumerate(self.data_loader):
+            for batch_i, (x, y) in enumerate(self.valid_data_loader):
                 x = x.to(self.device)
                 pred = self.model(x)
                 sum_loss += self.loss_function(pred, x)
         
-        loss = sum_loss / len(self.data_loader)
+        loss = sum_loss / len(self.valid_data_loader)
         
         print("*"*100)
         print("Validation, average loss = {:.6f}".format(loss))
@@ -89,15 +94,17 @@ class FittingTrainer(object):
             tb_logger.add_scalar("Validate/Loss", loss, n_iter) # avg loss
             tb_logger.add_images("Validate/data", x.detach(), n_iter) # only images of the last batch
             tb_logger.add_images("Validate/pred", pred.detach(), n_iter) # only images of the last batch
+            
+            suppls_dict = self.model.get_suppl()
+            for i, (key, val) in enumerate(suppls_dict.items()):
+                tb_logger.add_image("Validate/{}".format(key), val, n_iter, dataformats="HW")
         
     def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=SummaryWriter()):
         """
-        For the fitting model, there is no validation dataset.
-        The only difference with validation is that the model is in eval mode (no dropouts, etc) and no_grad.
         
         """
         for epoch_i in range(n_epoch):
             self.train_single_epoch(epoch_i, tb_logger=tb_logger)
             
             if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
-                self.validate((epoch_i+1) * len(self.data_loader), tb_logger=tb_logger)
+                self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger)

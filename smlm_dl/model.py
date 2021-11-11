@@ -86,7 +86,7 @@ class BaseRendererModel(nn.Module):
             x_new[:,i] = torch.mul(x_new[:,i], self.params_scaling[i])
         return self.render_images(x_new)
     
-    def build_params_config(self, img_size, fit_params, new_params_ref, new_params_default):        
+    def build_params_config(self, img_size, fit_params, new_params_ref={}, new_params_default={}):        
         self.params_ref.update({
             'x': [nn.Tanh(), 0, 0.75 * img_size[0]],
             'y': [nn.Tanh(), 0, 0.75 * img_size[1]],
@@ -144,8 +144,7 @@ class BaseRendererModel(nn.Module):
                 raise Exception("Unrecognized activation function. [{}]".format(type(act)))
             param = (param + offset) * scaling
             params.append(param)
-        params = np.stack(params, axis=1)[...,None,None]
-        print(params.shape)
+        params = np.stack(params, axis=1)[...,None,None]        
         images = self.render_images(params, True)
         return images
 
@@ -165,7 +164,7 @@ class Gaussian2DRenderer(BaseRendererModel):
     
     def __init__(self, img_size, fit_params):
 
-        params_activation, params_offset, params_scale = self.build_params_config(img_size, fit_params)        
+        params_activation, params_offset, params_scale = self.build_params_config(img_size, fit_params)
         
         BaseRendererModel.__init__(self, img_size,
                                    nn.ModuleList(params_activation),
@@ -206,9 +205,9 @@ class Gaussian2DRenderer(BaseRendererModel):
     
     
 class Template2DModel(EncoderModel):
-    def __init__(self, *args, **kwargs):
-        EncoderModel.__init__(self, last_out_channels=2, *args, **kwargs)
-        self.renderer = Template2DRenderer(self.img_size)
+    def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
+        EncoderModel.__init__(self, last_out_channels=len(fit_params), *args, **kwargs)
+        self.renderer = Template2DRenderer(self.img_size, fit_params)
         
     def forward(self, x):
         x = EncoderModel.forward(self, x)
@@ -221,15 +220,13 @@ class Template2DModel(EncoderModel):
 
     
 class Template2DRenderer(BaseRendererModel):
-    def __init__(self, img_size):
+    def __init__(self, img_size, fit_params):
+        params_activation, params_offset, params_scale = BaseRendererModel.build_params_config(self, img_size, fit_params)
+        
         BaseRendererModel.__init__(self, img_size,
-                                   nn.ModuleList([nn.Tanh(),
-                                                  nn.Tanh(),
-                                                 ]),                                   
-                                   [0,
-                                    0,],
-                                   [1 * img_size[0],
-                                    1 * img_size[1],],
+                                   nn.ModuleList(params_activation),                                   
+                                   params_offset,
+                                   params_scale,
                           )
         
         xs = torch.linspace(-4, 4, self.img_size[0]*2)
@@ -252,10 +249,11 @@ class Template2DRenderer(BaseRendererModel):
         
         kx = torch.fft.fftfreq(self.img_size[0]*2*2)
         ky = torch.fft.fftfreq(self.img_size[1]*2*2)
-        self.kx, self.ky = torch.meshgrid(kx, ky, indexing='ij')
-        
+        self.kx, self.ky = torch.meshgrid(kx, ky, indexing='ij')        
     
     def render_images(self, params, as_numpy_arr=False):
+        mapped_params = self.map_params(params)
+        
         template = self.template(None)
         template = self.template_render(template)
         
@@ -264,7 +262,7 @@ class Template2DRenderer(BaseRendererModel):
         # template_fft = torch.fft.fftshift(template)
         
         # shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.kx*params[:,[0]]*0.75*self.img_size[0] + self.ky*params[:,[1]]*0.75*self.img_size[1]))
-        shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.kx*params[:,[0]] + self.ky*params[:,[1]]))
+        shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.kx*mapped_params['x'] + self.ky*mapped_params['y']))
 
         shifted_template = torch.abs(torch.fft.ifft2(shifted_fft))
         # shifted_template = torch.fft.fftshift(shifted_template)
@@ -276,17 +274,13 @@ class Template2DRenderer(BaseRendererModel):
         # print(shifted_template.shape)
         shifted_template = self.pooling(shifted_template)
         
+        shifted_template = shifted_template * mapped_params['A'] + mapped_params['bg']
+        
         if as_numpy_arr:
             shifted_template = shifted_template.detach().numpy()
         
         return shifted_template
-    
-    def render_example_images(self, num):        
-        params = torch.rand((num, self.n_params, 1, 1))
-        params[:,0] = 2 * (params[:,0] - 0.5) * 1 * self.img_size[0]
-        params[:,1] = 2 * (params[:,1] - 0.5) * 1 * self.img_size[1]
-        images = self.render_images(params, True)
-        return images
+
     
 class FourierOptics2DModel(EncoderModel):
     def __init__(self, *args, **kwargs):

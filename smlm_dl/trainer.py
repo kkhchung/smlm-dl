@@ -4,6 +4,9 @@ from torch import nn
 from torch.utils.tensorboard import SummaryWriter
 
 from functools import partial
+
+import numpy as np
+from matplotlib import pyplot as plt
     
 class FittingTrainer(object):
     _default_optimizer = partial(torch.optim.Adam, lr=1e-4)    
@@ -63,13 +66,13 @@ class FittingTrainer(object):
                 if not tb_logger is None:
                     n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
                     tb_logger.add_scalar("Training/loss", loss, n_iter)
-                    tb_logger.add_images("Training/data", x.detach()[:tb_log_limit_images], n_iter)
-                    tb_logger.add_images("Training/pred", pred.detach()[:tb_log_limit_images], n_iter)
+                    tb_logger.add_images("Training/data", self.normalize_images(x.detach()[:tb_log_limit_images]), n_iter)
+                    tb_logger.add_images("Training/pred", self.normalize_images(pred.detach()[:tb_log_limit_images]), n_iter)
                     
                     if hasattr(self.model, 'get_suppl'):
                         suppls_dict = self.model.get_suppl()
                         for i, (key, val) in enumerate(suppls_dict.items()):
-                            tb_logger.add_image("Training/{}".format(key), val, n_iter, dataformats="HW")
+                            tb_logger.add_image("Training/{}".format(key), self.normalize_images(val), n_iter, dataformats="HW")
                 
         # print("-"*100)
                 
@@ -93,13 +96,25 @@ class FittingTrainer(object):
         
         if not tb_logger is None:
             tb_logger.add_scalar("Validate/Loss", loss, n_iter) # avg loss
-            tb_logger.add_images("Validate/data", x.detach()[:tb_log_limit_images], n_iter) # only images of the last batch
-            tb_logger.add_images("Validate/pred", pred.detach()[:tb_log_limit_images], n_iter) # only images of the last batch
+            tb_logger.add_images("Validate/data", self.normalize_images(x.detach()[:tb_log_limit_images]), n_iter) # only images of the last batch
+            tb_logger.add_images("Validate/pred", self.normalize_images(pred.detach()[:tb_log_limit_images]), n_iter) # only images of the last batch
+            
+            fig, axes = plt.subplots(2, 1, figsize=(min([x.shape[0], tb_log_limit_images])*4, 3*2))
+            im=axes[0].imshow(np.hstack(x.detach()[:tb_log_limit_images].mean(axis=1), ))
+            plt.colorbar(im, ax=axes[0])
+            axes[0].set_title('data')
+            axes[1].imshow(np.hstack(pred.detach()[:tb_log_limit_images].mean(axis=1), ))
+            plt.colorbar(im, ax=axes[1])
+            axes[1].set_title('pred')
             
             if hasattr(self.model, 'get_suppl'):
                 suppls_dict = self.model.get_suppl()
+                fig, axes = plt.subplots(1, len(suppls_dict), figsize=(len(suppls_dict)*4, 3))
                 for i, (key, val) in enumerate(suppls_dict.items()):
-                    tb_logger.add_image("Validate/{}".format(key), val, n_iter, dataformats="HW")
+                    tb_logger.add_image("Validate/{}".format(key), self.normalize_images(val), n_iter, dataformats="HW")
+                    im=axes[i].imshow(val)
+                    plt.colorbar(im, ax=axes[i])
+                    axes[i].set_title(key)
         
     def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=SummaryWriter()):
         """
@@ -110,3 +125,10 @@ class FittingTrainer(object):
             
             if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
                 self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger)
+                
+    def normalize_images(self, img, vmin=None, vmax=None):
+        if vmin is None:
+            vmin = img.min()
+        if vmax is None:
+            vmax = img.max()
+        return (img - vmin) / (vmax - vmin)

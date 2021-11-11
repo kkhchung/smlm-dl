@@ -109,12 +109,12 @@ class FittingTrainer(object):
             
             if hasattr(self.model, 'get_suppl'):
                 suppls_dict = self.model.get_suppl()
-                fig, axes = plt.subplots(1, len(suppls_dict), figsize=(len(suppls_dict)*4, 3))
+                fig, axes = plt.subplots(1, len(suppls_dict), figsize=(len(suppls_dict)*4, 3), squeeze=False)
                 for i, (key, val) in enumerate(suppls_dict.items()):
                     tb_logger.add_image("Validate/{}".format(key), self.normalize_images(val), n_iter, dataformats="HW")
-                    im=axes[i].imshow(val)
-                    plt.colorbar(im, ax=axes[i])
-                    axes[i].set_title(key)
+                    im=axes[0,i].imshow(val)
+                    plt.colorbar(im, ax=axes[0,i])
+                    axes[0,i].set_title(key)
         
     def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=SummaryWriter()):
         """

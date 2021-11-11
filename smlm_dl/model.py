@@ -216,6 +216,7 @@ class Template2DModel(EncoderModel):
     
     def get_suppl(self):
         template = self.renderer.template.parameter.detach().numpy() * self.renderer.hann_window.detach().numpy()
+        template /= template.max()
         return {'template':template}
 
     
@@ -237,6 +238,16 @@ class Template2DRenderer(BaseRendererModel):
         hann_window = torch.cos(r/4)**2 * (r<=4)        
         self.register_buffer('hann_window', hann_window, False)
         
+        xs = torch.linspace(-1, 1, self.img_size[0]*2*2)
+        ys = torch.linspace(-1, 1, self.img_size[0]*2*2)
+        xs, ys = torch.meshgrid(xs, ys, indexing='ij')
+        r = torch.sqrt(xs**2+ys**2)
+        large_hann_window = torch.cos(r/1)**2 * (r<=1)
+        self.register_buffer('hann_window_large', large_hann_window, False)
+        
+        xs = torch.linspace(-4, 4, self.img_size[0]*2)
+        ys = torch.linspace(-4, 4, self.img_size[0]*2)
+        xs, ys = torch.meshgrid(xs, ys, indexing='ij')
         r = torch.exp(-(xs**2/1 + ys**2/1))
         # r = r / torch.amax(r)
         # r -= 0.5
@@ -247,7 +258,7 @@ class Template2DRenderer(BaseRendererModel):
         # # tempalate image stored at 4 resolution
         # self.template = ParameterModule(torch.zeros((self.img_size[0]*2, self.img_size[1]*2)))
         # self.template.init_tensor()
-        self.pooling = nn.AvgPool2d((2,2))
+        self.pooling = nn.AvgPool2d((3,3), (2,2), padding=(1,1))
         
         kx = torch.fft.fftfreq(self.img_size[0]*2*2)
         ky = torch.fft.fftfreq(self.img_size[1]*2*2)
@@ -261,6 +272,7 @@ class Template2DRenderer(BaseRendererModel):
         template = self.template(None)
         template = self.template_render(template)
         template = template * self.hann_window
+        template = template / torch.amax(template)
         
         template = nn.functional.pad(template.unsqueeze(0), (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2, mode='replicate')[0]
         template_fft = torch.fft.fft2(template)
@@ -269,8 +281,11 @@ class Template2DRenderer(BaseRendererModel):
         # shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.kx*params[:,[0]]*0.75*self.img_size[0] + self.ky*params[:,[1]]*0.75*self.img_size[1]))
         shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.KX*mapped_params['x'] + self.KY*mapped_params['y']))
 
+        shifted_fft = shifted_fft * torch.fft.fftshift(self.hann_window_large)
+        
         shifted_template = torch.abs(torch.fft.ifft2(shifted_fft))
         # shifted_template = torch.fft.fftshift(shifted_template)
+        
         
         shifted_template = shifted_template[:,:,
                                             int(0.25*template.shape[0]):-int(0.25*template.shape[0]),

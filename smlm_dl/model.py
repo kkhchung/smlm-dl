@@ -145,7 +145,7 @@ class BaseRendererModel(nn.Module):
             param = (param + offset) * scaling
             params.append(param)
         params = np.stack(params, axis=1)[...,None,None]        
-        images = self.render_images(params, True)
+        images = self.render_images(torch.from_numpy(params), True)
         return images
 
         
@@ -215,7 +215,7 @@ class Template2DModel(EncoderModel):
         return x
     
     def get_suppl(self):
-        template = self.renderer.template.parameter.detach().numpy()
+        template = self.renderer.template.parameter.detach().numpy() * self.renderer.hann_window.detach().numpy()
         return {'template':template}
 
     
@@ -232,11 +232,13 @@ class Template2DRenderer(BaseRendererModel):
         xs = torch.linspace(-4, 4, self.img_size[0]*2)
         ys = torch.linspace(-4, 4, self.img_size[0]*2)
         xs, ys = torch.meshgrid(xs, ys, indexing='ij')
-        # r = torch.sqrt(xs**2+ys**2)
-        # self.template = ParameterModule(torch.clip(1-r, min=0))        
+        r = torch.sqrt(xs**2+ys**2)
+        # self.template = ParameterModule(torch.clip(1-r, min=0))
+        hann_window = torch.cos(r/4)**2 * (r<=4)        
+        self.register_buffer('hann_window', hann_window, False)
         
         r = torch.exp(-(xs**2/1 + ys**2/1))
-        r = r / torch.amax(r)
+        # r = r / torch.amax(r)
         # r -= 0.5
         # r *= 2
         self.template = ParameterModule(r)
@@ -249,20 +251,23 @@ class Template2DRenderer(BaseRendererModel):
         
         kx = torch.fft.fftfreq(self.img_size[0]*2*2)
         ky = torch.fft.fftfreq(self.img_size[1]*2*2)
-        self.kx, self.ky = torch.meshgrid(kx, ky, indexing='ij')        
+        KX, KY = torch.meshgrid(kx, ky, indexing='ij')
+        self.register_buffer('KX', KX, False)
+        self.register_buffer('KY', KY, False)
     
     def render_images(self, params, as_numpy_arr=False):
         mapped_params = self.map_params(params)
         
         template = self.template(None)
         template = self.template_render(template)
+        template = template * self.hann_window
         
         template = nn.functional.pad(template.unsqueeze(0), (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2, mode='replicate')[0]
         template_fft = torch.fft.fft2(template)
         # template_fft = torch.fft.fftshift(template)
         
         # shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.kx*params[:,[0]]*0.75*self.img_size[0] + self.ky*params[:,[1]]*0.75*self.img_size[1]))
-        shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.kx*mapped_params['x'] + self.ky*mapped_params['y']))
+        shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.KX*mapped_params['x'] + self.KY*mapped_params['y']))
 
         shifted_template = torch.abs(torch.fft.ifft2(shifted_fft))
         # shifted_template = torch.fft.fftshift(shifted_template)

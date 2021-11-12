@@ -303,9 +303,9 @@ class Template2DRenderer(BaseRendererModel):
 
     
 class FourierOptics2DModel(EncoderModel):
-    def __init__(self, *args, **kwargs):
-        EncoderModel.__init__(self, last_out_channels=2, *args, **kwargs)
-        self.renderer = FourierOptics2DRenderer(self.img_size)        
+    def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
+        EncoderModel.__init__(self, last_out_channels=len(fit_params), *args, **kwargs)
+        self.renderer = FourierOptics2DRenderer(self.img_size, fit_params)        
         
     def forward(self, x):
         x = EncoderModel.forward(self, x)
@@ -318,27 +318,28 @@ class FourierOptics2DModel(EncoderModel):
         return {'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase}
 
 class FourierOptics2DRenderer(BaseRendererModel):
-    def __init__(self, img_size):
+    def __init__(self, img_size, fit_params):
+        params_activation, params_offset, params_scale = self.build_params_config(img_size, fit_params)
+        
         BaseRendererModel.__init__(self, img_size,
-                                   nn.ModuleList([nn.Tanh(),
-                                                  nn.Tanh(),
-                                                 ]),                                   
-                                   [0,
-                                    0,],
-                                   [0.5 * img_size[0],
-                                    0.5 * img_size[1],],
+                                   nn.ModuleList(params_activation),
+                                   params_offset,
+                                   params_scale,
                                   )
         
         kx = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[0]))
         ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]))
-        self.kx, self.ky = torch.meshgrid(kx, ky, indexing='ij')
+        KX, KY = torch.meshgrid(kx, ky, indexing='ij')
+        self.register_buffer('KX', KX, False)
+        self.register_buffer('KY', KY, False)
         
         xs = torch.linspace(-1., 1., self.img_size[0])
         ys = torch.linspace(-1., 1., self.img_size[0])
         xs, ys = torch.meshgrid(xs, ys, indexing='ij')
         r = torch.sqrt(xs**2+ys**2)
         hann_window = torch.cos(r)**2 * (r<=1)
-        self.hann_window = hann_window
+        # self.hann_window = hann_window
+        self.register_buffer('hann_window', hann_window, False)
         
         self.pupil_magnitude = ParameterModule(torch.ones((self.img_size[0], self.img_size[1])))
         self.pupil_magnitude_act = nn.ReLU()
@@ -346,6 +347,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
         self.pupil_phase_act = nn.Tanh()
     
     def render_images(self, params, as_numpy_arr=False):
+        mapped_params = self.map_params(params)
         
         pupil_magnitude = self.pupil_magnitude_act(self.pupil_magnitude(None))
         pupil_magnitude = pupil_magnitude * self.hann_window
@@ -353,8 +355,8 @@ class FourierOptics2DRenderer(BaseRendererModel):
         pupil_phase = self.pupil_phase_act(self.pupil_phase(None)) * np.pi
         pupil_phase = pupil_phase[None,...] * torch.ones(params.shape[0])[:,None,None,None]
         
-        pupil_phase = pupil_phase - np.pi * (self.kx[None,...] * params[:, [0]])
-        pupil_phase = pupil_phase - np.pi * (self.ky[None,...] * params[:, [1]])
+        pupil_phase = pupil_phase - np.pi * (self.KX[None,...] * mapped_params['x'])
+        pupil_phase = pupil_phase - np.pi * (self.KY[None,...] * mapped_params['y'])
         
         pupil = pupil_magnitude[None,None,...] * torch.exp(1j * pupil_phase)
         pupil = nn.functional.pad(pupil, (int(1.5*pupil.shape[2]),)*2 + (int(1.5*pupil.shape[3]),)*2, mode='constant')
@@ -362,23 +364,17 @@ class FourierOptics2DRenderer(BaseRendererModel):
         shifted_pupil = torch.fft.ifftshift(pupil)
                
         images = torch.fft.ifftshift(torch.abs(torch.fft.ifft2(shifted_pupil))**2)
+        images = images / torch.amax(images, dim=(2,3), keepdims=True)
         images = images[:,:,int(0.375*images.shape[2]):-int(0.375*images.shape[2]),
                  int(0.375*images.shape[3]):-int(0.375*images.shape[3])]
         
-        images = images - torch.amin(images, dim=(2,3), keepdims=True)
-        images = images / torch.amax(images, dim=(2,3), keepdims=True)
+        images = images * mapped_params['A'] + mapped_params['bg']
         
         if as_numpy_arr:
             images = images.detach().numpy()
         
         return images
-    
-    def render_example_images(self, num):        
-        params = torch.rand((num, self.n_params, 1, 1))
-        params[:,0] = 2 * (params[:,0] - 0.5) * 0.5 * self.img_size[0]
-        params[:,1] = 2 * (params[:,1] - 0.5) * 0.5 * self.img_size[1]
-        images = self.render_images(params, True)
-        return images
+
     
 class ParameterModule(nn.Module):
     """

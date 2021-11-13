@@ -7,20 +7,15 @@ class SimulatedPSFDataset(Dataset):
     """
     Base class.
     """
-    def __init__(self, size=(32, 32), length=512, random_z=False, psf_params={'A':[500,2000], 'bg':[0,100]},
+    def __init__(self, size=(32, 32), length=512, dropout_p=0, random_z=False, psf_params={'A':[500,2000], 'bg':[0,100]},
                  noise_params={'poisson':True, 'gaussian':10}, normalize=True, *args, **kwargs):
         Dataset.__init__(self)
         
-        self.random_z = random_z
-        self.shifts = list([np.random.uniform(-size[0]/3, size[0]/3, length),
-                            np.random.uniform(-size[1]/3, size[1]/3, length),                                
-                            ])
-        if self.random_z:
-            self.shifts.append(np.random.uniform(-2*np.pi, 2*np.pi, length))
-        self.shifts = np.stack(self.shifts, axis=-1)
-        
-        psfs = self.generate_psfs(size, length, self.shifts, psf_params, *args, **kwargs) #assumes normalized from 0 to 1
-        
+        if isinstance(length, int):
+            output_psfs_shape = [length, 1]
+        else:
+            output_psfs_shape = length
+            
         if not 'A' in psf_params:
             print("psf amplitude defaulting to [500, 2000]")
             A = [500, 2000]
@@ -33,8 +28,26 @@ class SimulatedPSFDataset(Dataset):
         else:
             bg = psf_params['bg']
         
-        psfs = psfs * np.random.uniform(A[0], A[1], length)[:, None, None]
-        psfs = psfs + np.random.uniform(bg[0], bg[1], length)[:, None, None]
+        self.random_z = random_z
+        self.shifts = list([np.random.uniform(-size[0]/3, size[0]/3, np.prod(output_psfs_shape)),
+                            np.random.uniform(-size[1]/3, size[1]/3, np.prod(output_psfs_shape)),                                
+                            ])
+        if self.random_z:
+            self.shifts.append(np.random.uniform(-2*np.pi, 2*np.pi, np.prod(output_psfs_shape)))
+        self.shifts = np.stack(self.shifts, axis=-1)
+            
+        # print(np.prod(output_psfs_shape))
+        psfs = self.generate_psfs(size, np.prod(output_psfs_shape), self.shifts, psf_params, *args, **kwargs) #assumes normalized from 0 to 1
+        
+        if dropout_p > 0:
+            psfs = psfs * (np.random.rand(psfs.shape[0], 1, 1) > dropout_p)
+        
+        psfs = psfs * np.random.uniform(A[0], A[1], psfs.shape[0])[:, None, None]
+        
+        psfs = psfs.reshape(output_psfs_shape[0], output_psfs_shape[1], psfs.shape[1], psfs.shape[2])
+        psfs = psfs.sum(axis=1)
+        
+        psfs = psfs + np.random.uniform(bg[0], bg[1], output_psfs_shape[0])[:, None, None]
         # print(psfs.dtype)
         
         if len(noise_params) > 0:
@@ -66,9 +79,11 @@ class SimulatedPSFDataset(Dataset):
         
 
 class Gaussian2DPSFDataset(SimulatedPSFDataset):
-    def __init__(self, size=(32, 32), length=512, psf_params={'A':[500,2000], 'bg':[0,100], 'sig_x':[5,5], 'sig_y':[5,5]},
+    def __init__(self, size=(32, 32), length=512, dropout_p=0, psf_params={'A':[500,2000], 'bg':[0,100], 'sig_x':[5,5], 'sig_y':[5,5]},
                  noise_params={'poisson':True, 'gaussian':100}, *args, **kwargs):
-        SimulatedPSFDataset.__init__(self, size, length, False, psf_params, noise_params, *args, **kwargs)
+        SimulatedPSFDataset.__init__(self, size=size, length=length,
+                                     dropout_p=dropout_p, random_z=False,
+                                     psf_params=psf_params, noise_params=noise_params, *args, **kwargs)
         
     def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):
         xs = np.arange(0, size[0]) - 0.5*(size[0]-1)
@@ -84,7 +99,7 @@ class Gaussian2DPSFDataset(SimulatedPSFDataset):
     
     
 class FourierOpticsPSFDataset(SimulatedPSFDataset):
-    def __init__(self, size=(32, 32), length=512, random_z=False, psf_params={'A':[500,2000], 'bg':[0,100], 'sig_x':[2.5,2.5], 'sig_y':[2.5,2.5]},
+    def __init__(self, size=(32, 32), length=512, dropout_p=0, random_z=False, psf_params={'A':[500,2000], 'bg':[0,100], 'sig_x':[2.5,2.5], 'sig_y':[2.5,2.5]},
                  psf_zerns={},
                  noise_params={'poisson':True, 'gaussian':100},
                 *args, **kwargs):
@@ -93,7 +108,9 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         ky = np.fft.fftshift(np.fft.fftfreq(4*size[1]))
         self.KX, self.KY = np.meshgrid(kx, ky, indexing='ij')
         
-        SimulatedPSFDataset.__init__(self, size, length, random_z, psf_params, noise_params, psf_zerns=psf_zerns, *args, **kwargs)
+        SimulatedPSFDataset.__init__(self, size=size, length=length, dropout_p=dropout_p,
+                                     random_z=random_z, psf_params=psf_params,
+                                     noise_params=noise_params, psf_zerns=psf_zerns, *args, **kwargs)
         
         
     def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):

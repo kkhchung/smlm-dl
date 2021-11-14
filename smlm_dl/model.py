@@ -62,6 +62,106 @@ class EncoderModel(nn.Module):
             nn.ReLU(),
         )
     
+class BaseFitModel(EncoderModel):
+    params_ref = dict()
+    def __init__(self, renderer_class, img_size=(32,32), fit_params=['x', 'y', 'sig'], max_psf_count=1, *args, **kwargs):
+        self.setup_fit_params(img_size, fit_params, max_psf_count)
+        EncoderModel.__init__(self, img_size=img_size, last_out_channels=self.n_fit_params, *args, **kwargs)
+        self.renderer = renderer_class(self.img_size, self.fit_params)
+        
+    def forward(self, x):
+        x = EncoderModel.forward(self, x)
+        batch_size = x.shape[0]
+        x = self.map_params(x)
+        x = self.renderer(x, batch_size)
+        return x
+    
+    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref={},):
+        self.params_ref.update({
+            'x': FitParameter(nn.Tanh(), 0, 0.75 * img_size[0], 0, True),
+            'y': FitParameter(nn.Tanh(), 0, 0.75 * img_size[1], 0, True),
+            'z': FitParameter(nn.Tanh(), 0, 2 * np.pi, 0, True),
+            'A': FitParameter(nn.ReLU(), 0, 1000, 1, True),
+            'bg': FitParameter(nn.Tanh(), 0, 500, 0, True),
+        })        
+        
+        self.params_ref.update(new_params_ref)
+        
+        detailed_fit_params = dict()
+        n_fit_params = 0
+        for param in fit_params:
+            if not param in self.params_ref:
+                raise Exception("fit param ({}) not recognised for this model".format(param))
+            repeats = max_psf_count if self.params_ref[param].per_psf else 1
+            detailed_fit_params[param] = list()
+            for i in range(repeats):
+                detailed_fit_params[param].append(self.params_ref[param].copy())
+                n_fit_params += 1
+        self.fit_params = detailed_fit_params
+        self.n_fit_params = n_fit_params
+        
+    def map_params(self, x):
+        mapped_params = dict()
+        i = 0
+        for param in self.params_ref:
+            if not param in self.fit_params:
+                mapped_params[param] = self.params_ref[param].default
+            else:
+                repeats = len(self.fit_params[param])
+                mapped_params[param] = x[:, i:i+repeats, ...]
+                
+                for j in range(mapped_params[param].shape[1]):
+                    mapped_params[param][:, j] = self.fit_params[param][j].activation(mapped_params[param][:, j])
+                    mapped_params[param][:, j] = torch.add(mapped_params[param][:, j], self.fit_params[param][j].offset)
+                    mapped_params[param][:, j] = torch.mul(mapped_params[param][:, j], self.fit_params[param][j].scaling)
+                
+                i += repeats
+        return mapped_params
+    
+    def render_example_images(self, num):
+        mapped_params = dict()
+        i = 0
+        for param in self.params_ref:
+            if not param in self.fit_params:
+                mapped_params[param] = self.params_ref[param].default
+            else:
+                repeats = len(self.fit_params[param])                
+                mapped_params[param] = torch.rand((num, repeats, 1, 1))
+                
+                for j in range(mapped_params[param].shape[1]):
+                    if isinstance(self.fit_params[param][j].activation, nn.Tanh):
+                        mapped_params[param][:, j] = (mapped_params[param][:, j] - 0.5) * 2
+                    elif isinstance(self.fit_params[param][j].activation, nn.ReLU):
+                        mapped_params[param][:, j] = mapped_params[param][:, j]
+                    else:
+                        raise Exception("Unrecognized activation function. [{}]".format(type(self.fit_params[param][j].activation)))
+                    mapped_params[param][:, j] = self.fit_params[param][j].activation(mapped_params[param][:, j])
+                    mapped_params[param][:, j] = torch.add(mapped_params[param][:, j], self.fit_params[param][j].offset)
+                    mapped_params[param][:, j] = torch.mul(mapped_params[param][:, j], self.fit_params[param][j].scaling)
+                
+                i += repeats
+        # print(mapped_params)
+        images = self.renderer.render_images(mapped_params, num, True)
+        return images
+        
+    
+class FitParameter(object):
+    activation = None
+    offset = None
+    scaling = None
+    per_psf = None
+    
+    def __init__(self, activation, offset, scaling, default, per_psf):
+        self.activation = activation
+        self.offset = offset
+        self.scaling = scaling
+        self.default = default
+        self.per_psf = per_psf
+        
+    def copy(self):
+        return FitParameter(self.activation, self.offset, self.scaling, self.default, self.per_psf)
+    
+    
 class BaseRendererModel(nn.Module):
     """
     Base renderer class for a few standardized output functions
@@ -70,107 +170,35 @@ class BaseRendererModel(nn.Module):
     params_default = dict()
     params_ind = dict()
     
-    def __init__(self, img_size, params_activation, params_offset, params_scaling):
+    def __init__(self, img_size):
         nn.Module.__init__(self)
         self.img_size = img_size
-        self.n_params = len(params_activation)
-        self.params_activation = params_activation
-        self.params_offset = params_offset
-        self.params_scaling = params_scaling
         
-    def forward(self, x):
-        x_new = torch.empty_like(x)
-        for i, activation_func in enumerate(self.params_activation):
-            x_new[:,i,...] = activation_func(x[:,i,...])
-            x_new[:,i] = torch.add(x_new[:,i], self.params_offset[i])
-            x_new[:,i] = torch.mul(x_new[:,i], self.params_scaling[i])
-        return self.render_images(x_new)
-    
-    def build_params_config(self, img_size, fit_params, new_params_ref={}, new_params_default={}):        
-        self.params_ref.update({
-            'x': [nn.Tanh(), 0, 0.75 * img_size[0]],
-            'y': [nn.Tanh(), 0, 0.75 * img_size[1]],
-            'A': [nn.ReLU(), 0, 1000],
-            'bg': [nn.Tanh(), 0, 500],
-        })
+    def forward(self, x, batch_size=None):
+        return self.render_images(x, batch_size)
         
-        self.params_default.update({            
-            'x': 0,
-            'y': 0,
-            'A': 1,
-            'bg': 0,
-        })
-        
-        self.params_ref.update(new_params_ref)
-        self.params_default.update(new_params_default)        
-                
-        params_activation = list()
-        params_offset = list()
-        params_scale = list()
-        
-        for i, key in enumerate(fit_params):
-            if not key in self.params_ref:
-                raise Exception("fit_params not recognised")
-            self.params_ind[key] = i
-            ref = self.params_ref[key]
-            params_activation.append(ref[0])
-            params_offset.append(ref[1])
-            params_scale.append(ref[2])
-        
-        return params_activation, params_offset, params_scale
-    
-    def map_params(self, params):
-        mapped_params = dict()
-        for key in self.params_ref:
-            if key in self.params_ind:
-                mapped_params[key] = params[:, [self.params_ind[key]]]
-            else:
-                mapped_params[key] = self.params_default[key]
-        return mapped_params
-        
-    def render_images(self, params, detach=False):
+    def render_images(self, params, batch_size, detach=False):
         # explicit call to render images without going through the rest of the model
         raise NotImplementedError()
-        
-    def render_example_images(self, num):
-        params = list()
-        for i, (key, val) in enumerate(self.params_ind.items()):
-            act, offset, scaling = self.params_ref[key]
-            if isinstance(act, nn.Tanh):
-                param = np.random.uniform(-1, 1, num)
-            elif isinstance(act, nn.ReLU):
-                param = np.random.uniform(0, 1, num)
-            else:
-                raise Exception("Unrecognized activation function. [{}]".format(type(act)))
-            param = (param + offset) * scaling
-            params.append(param)
-        params = np.stack(params, axis=1)[...,None,None]        
-        images = self.render_images(torch.from_numpy(params), True)
-        return images
 
         
-class Gaussian2DModel(EncoderModel):
+class Gaussian2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y', 'sig'], *args, **kwargs):
-        EncoderModel.__init__(self, last_out_channels=len(fit_params), *args, **kwargs)
-        self.renderer = Gaussian2DRenderer(self.img_size, fit_params)
+        BaseFitModel.__init__(self, renderer_class=Gaussian2DRenderer, fit_params=fit_params, *args, **kwargs)
+    
+    def setup_fit_params(self, img_size, fit_params, max_psf_count, ):
+        new_params_ref = {
+            'sig': FitParameter(nn.ReLU(), 2, 1, 2, True),
+        }
         
-    def forward(self, x):
-        x = EncoderModel.forward(self, x)
-        x = self.renderer(x)
-        return x
+        BaseFitModel.setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref)
 
     
 class Gaussian2DRenderer(BaseRendererModel):
     
     def __init__(self, img_size, fit_params):
-
-        params_activation, params_offset, params_scale = self.build_params_config(img_size, fit_params)
         
-        BaseRendererModel.__init__(self, img_size,
-                                   nn.ModuleList(params_activation),
-                                   params_offset,
-                                   params_scale,
-                                  )
+        BaseRendererModel.__init__(self, img_size,)
         
         xs = torch.arange(0, self.img_size[0]) - 0.5*(self.img_size[0]-1)
         ys = torch.arange(0, self.img_size[1]) - 0.5*(self.img_size[1]-1)
@@ -190,8 +218,7 @@ class Gaussian2DRenderer(BaseRendererModel):
         
         return BaseRendererModel.build_params_config(self, img_size, fit_params, new_params_ref, new_params_default)
     
-    def render_images(self, params, as_numpy_arr=False):
-        mapped_params = self.map_params(params)
+    def render_images(self, mapped_params, batch_size=None, as_numpy_arr=False):
         
         images = torch.exp(-((self.XS[None,...]-mapped_params['x'])**2/mapped_params['sig'] \
                        + (self.YS[None,...]-mapped_params['y'])**2/mapped_params['sig']))
@@ -204,15 +231,9 @@ class Gaussian2DRenderer(BaseRendererModel):
         return images
     
     
-class Template2DModel(EncoderModel):
+class Template2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
-        EncoderModel.__init__(self, last_out_channels=len(fit_params), *args, **kwargs)
-        self.renderer = Template2DRenderer(self.img_size, fit_params)
-        
-    def forward(self, x):
-        x = EncoderModel.forward(self, x)
-        x = self.renderer(x)
-        return x
+        BaseFitModel.__init__(self, renderer_class=Template2DRenderer, fit_params=fit_params, *args, **kwargs)
     
     def get_suppl(self):
         template = self.renderer.template.parameter.detach().numpy() * self.renderer.hann_window.detach().numpy()
@@ -222,13 +243,8 @@ class Template2DModel(EncoderModel):
     
 class Template2DRenderer(BaseRendererModel):
     def __init__(self, img_size, fit_params):
-        params_activation, params_offset, params_scale = BaseRendererModel.build_params_config(self, img_size, fit_params)
-        
-        BaseRendererModel.__init__(self, img_size,
-                                   nn.ModuleList(params_activation),                                   
-                                   params_offset,
-                                   params_scale,
-                          )
+
+        BaseRendererModel.__init__(self, img_size,)
         
         xs = torch.linspace(-4, 4, self.img_size[0]*2)
         ys = torch.linspace(-4, 4, self.img_size[0]*2)
@@ -266,8 +282,7 @@ class Template2DRenderer(BaseRendererModel):
         self.register_buffer('KX', KX, False)
         self.register_buffer('KY', KY, False)
     
-    def render_images(self, params, as_numpy_arr=False):
-        mapped_params = self.map_params(params)
+    def render_images(self, mapped_params, batch_size=None, as_numpy_arr=False):
         
         template = self.template(None)
         template = self.template_render(template)
@@ -302,15 +317,9 @@ class Template2DRenderer(BaseRendererModel):
         return shifted_template
 
     
-class FourierOptics2DModel(EncoderModel):
+class FourierOptics2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
-        EncoderModel.__init__(self, last_out_channels=len(fit_params), *args, **kwargs)
-        self.renderer = FourierOptics2DRenderer(self.img_size, fit_params)        
-        
-    def forward(self, x):
-        x = EncoderModel.forward(self, x)
-        x = self.renderer(x)
-        return x
+        BaseFitModel.__init__(self, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, *args, **kwargs)
     
     def get_suppl(self):
         pupil_magnitude = self.renderer.pupil_magnitude.parameter.detach().numpy() * self.renderer.hann_window.detach().numpy()
@@ -319,13 +328,8 @@ class FourierOptics2DModel(EncoderModel):
 
 class FourierOptics2DRenderer(BaseRendererModel):
     def __init__(self, img_size, fit_params):
-        params_activation, params_offset, params_scale = self.build_params_config(img_size, fit_params)
-        
-        BaseRendererModel.__init__(self, img_size,
-                                   nn.ModuleList(params_activation),
-                                   params_offset,
-                                   params_scale,
-                                  )
+
+        BaseRendererModel.__init__(self, img_size,)
         
         kx = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[0]))
         ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]))
@@ -343,17 +347,19 @@ class FourierOptics2DRenderer(BaseRendererModel):
         
         self.pupil_magnitude = ParameterModule(torch.ones((self.img_size[0], self.img_size[1])))
         self.pupil_magnitude_act = nn.ReLU()
-        self.pupil_phase = ParameterModule(torch.zeros((self.img_size[0], self.img_size[1])))
+        
+        pupil_phase_init = torch.zeros((self.img_size[0], self.img_size[1]))
+        nn.init.xavier_normal_(pupil_phase_init, 0.1)
+        self.pupil_phase = ParameterModule(pupil_phase_init)
         self.pupil_phase_act = nn.Tanh()
     
-    def render_images(self, params, as_numpy_arr=False):
-        mapped_params = self.map_params(params)
+    def render_images(self, mapped_params, batch_size, as_numpy_arr=False):
         
         pupil_magnitude = self.pupil_magnitude_act(self.pupil_magnitude(None))
         pupil_magnitude = pupil_magnitude * self.hann_window
         
         pupil_phase = self.pupil_phase_act(self.pupil_phase(None)) * np.pi
-        pupil_phase = pupil_phase[None,...] * torch.ones(params.shape[0])[:,None,None,None]
+        pupil_phase = pupil_phase[None,...] * torch.ones(batch_size)[:,None,None,None]
         
         pupil_phase = pupil_phase - np.pi * (self.KX[None,...] * mapped_params['x'])
         pupil_phase = pupil_phase - np.pi * (self.KY[None,...] * mapped_params['y'])
@@ -419,8 +425,9 @@ def check_model(model, dataloader):
             plt.colorbar(im, ax=axes[0, i])
             axes[0, i].set_title(key)
         
-    if hasattr(model, 'renderer') and hasattr(model.renderer, 'render_example_images'):
-        example_images = model.renderer.render_example_images(8)
+    if hasattr(model, 'render_example_images'):
+        
+        example_images = model.render_example_images(8)
         fig, axes = plt.subplots(1, len(example_images), figsize=(4*len(example_images), 3), squeeze=False)
         for i, img in enumerate(example_images):
             im = axes[0, i].imshow(img[0])

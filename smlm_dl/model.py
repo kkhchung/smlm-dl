@@ -82,7 +82,8 @@ class BaseFitModel(EncoderModel):
             'y': FitParameter(nn.Tanh(), 0, 0.75 * img_size[1], 0, True),
             'z': FitParameter(nn.Tanh(), 0, 2 * np.pi, 0, True),
             'A': FitParameter(nn.ReLU(), 0, 1000, 1, True),
-            'bg': FitParameter(nn.Tanh(), 0, 500, 0, True),
+            'bg': FitParameter(nn.Tanh(), 0, 500, 0, False),
+            'p': FitParameter(nn.Sigmoid(), 0, 1, 1, True)
         })        
         
         self.params_ref.update(new_params_ref)
@@ -98,6 +99,7 @@ class BaseFitModel(EncoderModel):
                 detailed_fit_params[param].append(self.params_ref[param].copy())
                 n_fit_params += 1
         self.fit_params = detailed_fit_params
+        # print(self.fit_params)
         self.n_fit_params = n_fit_params
         
     def map_params(self, x):
@@ -133,6 +135,8 @@ class BaseFitModel(EncoderModel):
                         mapped_params[param][:, j] = (mapped_params[param][:, j] - 0.5) * 2
                     elif isinstance(self.fit_params[param][j].activation, nn.ReLU):
                         mapped_params[param][:, j] = mapped_params[param][:, j]
+                    elif isinstance(self.fit_params[param][j].activation, nn.Sigmoid):
+                        mapped_params[param][:, j] = mapped_params[param][:, j]
                     else:
                         raise Exception("Unrecognized activation function. [{}]".format(type(self.fit_params[param][j].activation)))
                     mapped_params[param][:, j] = self.fit_params[param][j].activation(mapped_params[param][:, j])
@@ -161,6 +165,16 @@ class FitParameter(object):
     def copy(self):
         return FitParameter(self.activation, self.offset, self.scaling, self.default, self.per_psf)
     
+    def __repr__(self):
+        text = "<"
+        text += "act: {}, ".format(self.activation.__class__.__name__)
+        text += "offset: {}, ".format(self.offset)
+        text += "scaling: {}, ".format(self.scaling)
+        text += "default: {}, ".format(self.default)
+        text += "per psf: {}, ".format(self.per_psf)
+        text += ">"
+        return text
+    
     
 class BaseRendererModel(nn.Module):
     """
@@ -176,8 +190,15 @@ class BaseRendererModel(nn.Module):
         
     def forward(self, x, batch_size=None):
         return self.render_images(x, batch_size)
+    
+    def render_images(self, params, batch_size, as_numpy_array=False):
+        images = self._render_images(params, batch_size)
+        images = images.sum(dim=1, keepdim=True)        
+        if as_numpy_array:
+            images = images.detach().numpy()
+        return images
         
-    def render_images(self, params, batch_size, detach=False):
+    def _render_images(self, params, batch_size):
         # explicit call to render images without going through the rest of the model
         raise NotImplementedError()
 
@@ -218,15 +239,14 @@ class Gaussian2DRenderer(BaseRendererModel):
         
         return BaseRendererModel.build_params_config(self, img_size, fit_params, new_params_ref, new_params_default)
     
-    def render_images(self, mapped_params, batch_size=None, as_numpy_arr=False):
+    def _render_images(self, mapped_params, batch_size=None, ):
         
         images = torch.exp(-((self.XS[None,...]-mapped_params['x'])**2/mapped_params['sig'] \
                        + (self.YS[None,...]-mapped_params['y'])**2/mapped_params['sig']))
         
         images = images * mapped_params['A'] + mapped_params['bg']
-        
-        if as_numpy_arr:
-            images = images.detach().numpy()
+        # print(mapped_params['x'][0], mapped_params['y'][0], mapped_params['p'])
+        images = images * (mapped_params['p']>0.5)
         
         return images
     
@@ -282,7 +302,7 @@ class Template2DRenderer(BaseRendererModel):
         self.register_buffer('KX', KX, False)
         self.register_buffer('KY', KY, False)
     
-    def render_images(self, mapped_params, batch_size=None, as_numpy_arr=False):
+    def _render_images(self, mapped_params, batch_size=None, ):
         
         template = self.template(None)
         template = self.template_render(template)
@@ -310,9 +330,7 @@ class Template2DRenderer(BaseRendererModel):
         shifted_template = self.pooling(shifted_template)
         
         shifted_template = shifted_template * mapped_params['A'] + mapped_params['bg']
-        
-        if as_numpy_arr:
-            shifted_template = shifted_template.detach().numpy()
+        shifted_template = shifted_template * (mapped_params['p']>0.5)
         
         return shifted_template
 
@@ -353,7 +371,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
         self.pupil_phase = ParameterModule(pupil_phase_init)
         self.pupil_phase_act = nn.Tanh()
     
-    def render_images(self, mapped_params, batch_size, as_numpy_arr=False):
+    def _render_images(self, mapped_params, batch_size, ):
         
         pupil_magnitude = self.pupil_magnitude_act(self.pupil_magnitude(None))
         pupil_magnitude = pupil_magnitude * self.hann_window
@@ -375,9 +393,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
                  int(0.375*images.shape[3]):-int(0.375*images.shape[3])]
         
         images = images * mapped_params['A'] + mapped_params['bg']
-        
-        if as_numpy_arr:
-            images = images.detach().numpy()
+        images = images * (mapped_params['p']>0.5)
         
         return images
 

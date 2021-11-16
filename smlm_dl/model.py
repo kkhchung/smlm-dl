@@ -64,8 +64,8 @@ class EncoderModel(nn.Module):
     
 class BaseFitModel(EncoderModel):
     params_ref = dict()
-    def __init__(self, renderer_class, img_size=(32,32), fit_params=['x', 'y', 'sig'], max_psf_count=1, *args, **kwargs):
-        self.setup_fit_params(img_size, fit_params, max_psf_count)
+    def __init__(self, renderer_class, img_size=(32,32), fit_params=['x', 'y', 'sig'], max_psf_count=1, params_ref_override={}, *args, **kwargs):
+        self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override)
         EncoderModel.__init__(self, img_size=img_size, last_out_channels=self.n_fit_params, *args, **kwargs)
         self.renderer = renderer_class(self.img_size, self.fit_params)
         
@@ -207,12 +207,13 @@ class Gaussian2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y', 'sig'], *args, **kwargs):
         BaseFitModel.__init__(self, renderer_class=Gaussian2DRenderer, fit_params=fit_params, *args, **kwargs)
     
-    def setup_fit_params(self, img_size, fit_params, max_psf_count, ):
-        new_params_ref = {
-            'sig': FitParameter(nn.ReLU(), 2, 1, 2, True),
+    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref):
+        params_ref = {
+            'sig': FitParameter(nn.ReLU(), 2, 1, 5, True),
         }
+        params_ref.update(new_params_ref)
         
-        BaseFitModel.setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref)
+        BaseFitModel.setup_fit_params(self, img_size, fit_params, max_psf_count, params_ref)
 
     
 class Gaussian2DRenderer(BaseRendererModel):
@@ -226,18 +227,6 @@ class Gaussian2DRenderer(BaseRendererModel):
         XS, YS = torch.meshgrid(xs, ys, indexing='ij')
         self.register_buffer('XS', XS, False)
         self.register_buffer('YS', YS, False)
-                
-    def build_params_config(self, img_size, fit_params):
-        
-        new_params_ref = {
-            'sig': [nn.ReLU(), 2, 1],
-            }
-        
-        new_params_default = {   
-            'sig': 2,
-        }
-        
-        return BaseRendererModel.build_params_config(self, img_size, fit_params, new_params_ref, new_params_default)
     
     def _render_images(self, mapped_params, batch_size=None, ):
         

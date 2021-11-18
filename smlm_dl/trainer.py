@@ -3,13 +3,18 @@ from torch import nn
 
 from torch.utils.tensorboard import SummaryWriter
 
+from torchinfo import summary
+
 from functools import partial
+import os
+import time
 
 import numpy as np
 from matplotlib import pyplot as plt
     
 class FittingTrainer(object):
-    _default_optimizer = partial(torch.optim.Adam, lr=1e-4)    
+    _default_optimizer = partial(torch.optim.Adam, lr=1e-4)
+    current_state = {}
     
     def __init__(self, model, train_data_loader, valid_data_loader=None, optimizer=None, loss_function=nn.MSELoss(), try_cuda=True):
         
@@ -76,6 +81,12 @@ class FittingTrainer(object):
                             tb_logger.add_image("Training/{}".format(key), self.normalize_images(val), n_iter, dataformats="HW")
                 
         # print("-"*100)
+        
+        self.current_state['epoch'] = epoch_i
+        self.current_state['loss'] = loss
+        if not tb_logger is None:
+            self.current_state['filename'] = os.path.split(tb_logger.log_dir)[1]
+            self.current_state['log_path'] = tb_logger.log_dir
                 
     def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=16, show_images=True):
         self.model.to(self.device)
@@ -135,3 +146,53 @@ class FittingTrainer(object):
         if vmax is None:
             vmax = img.max()
         return (img - vmin) / (vmax - vmin)
+    
+    def save_checkpoint(self, filename=None):
+        state_dict = {
+            "model_state_dict": self.model.state_dict(),
+            "optimizer_state_dict": self.optimizer.state_dict(),
+            "loss_function_state_dict": self.loss_function.state_dict(),
+        }
+        state_dict.update(self.current_state)
+        if not filename is None:
+            state_dict["filename"] = filename
+        save_path = os.path.join("checkpoints", state_dict["filename"] + ".pt")
+        torch.save(state_dict, save_path)
+        
+        print("Saved to : {}".format(save_path))
+        for key, val in state_dict.items():
+            if isinstance(val, dict):
+                print("{}: {}".format(key, val.keys()))
+            else:
+                print("{}: {}".format(key, val))
+        
+    def load_checkpoint(self, filepath):
+        checkpoint = torch.load(filepath)
+        
+        self.model.load_state_dict(checkpoint.pop("model_state_dict"))
+        self.optimizer.load_state_dict(checkpoint.pop("optimizer_state_dict"))
+        self.loss_function.load_state_dict(checkpoint.pop("loss_function_state_dict"))
+        
+        print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))
+        print(summary(self.model))
+        print(self.optimizer)
+        print(self.loss_function)
+        for key, val in checkpoint.items():            
+            self.current_state['key'] = val
+        print(self.current_state)
+        
+    def save_model(self, filename=None):
+        path = self.current_state.pop("filename", None)
+        if not filename is None:
+            path = filename
+        save_path = os.path.join("models", path + ".mod")
+        torch.save(self.model, save_path)
+        print("Saved to : {}".format(save_path))
+        
+    @staticmethod
+    def from_model_file(filepath, *args, **kwargs):
+        model = torch.load(filepath)
+        trainer = FittingTrainer(model, *args, **kwargs)
+        print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))
+        print(summary(model))
+        return trainer

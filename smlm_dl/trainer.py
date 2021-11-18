@@ -68,6 +68,7 @@ class FittingTrainer(object):
                     tb_logger.add_scalar("Training/loss", loss, n_iter)
                     tb_logger.add_images("Training/data", self.normalize_images(x.detach()[:tb_log_limit_images]), n_iter)
                     tb_logger.add_images("Training/pred", self.normalize_images(pred.detach()[:tb_log_limit_images]), n_iter)
+                    tb_logger.add_images("Training/diff", self.normalize_images(x.detach()[:tb_log_limit_images]-pred.detach()[:tb_log_limit_images]), n_iter)
                     
                     if hasattr(self.model, 'get_suppl'):
                         suppls_dict = self.model.get_suppl()
@@ -76,7 +77,7 @@ class FittingTrainer(object):
                 
         # print("-"*100)
                 
-    def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=16):
+    def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=16, show_images=True):
         self.model.to(self.device)
         self.model.eval()
         
@@ -98,14 +99,7 @@ class FittingTrainer(object):
             tb_logger.add_scalar("Validate/Loss", loss, n_iter) # avg loss
             tb_logger.add_images("Validate/data", self.normalize_images(x.detach()[:tb_log_limit_images]), n_iter) # only images of the last batch
             tb_logger.add_images("Validate/pred", self.normalize_images(pred.detach()[:tb_log_limit_images]), n_iter) # only images of the last batch
-            
-            fig, axes = plt.subplots(2, 1, figsize=(min([x.shape[0], tb_log_limit_images])*4, 3*2))
-            im=axes[0].imshow(np.hstack(x.detach()[:tb_log_limit_images].mean(axis=1), ))
-            plt.colorbar(im, ax=axes[0])
-            axes[0].set_title('data')
-            axes[1].imshow(np.hstack(pred.detach()[:tb_log_limit_images].mean(axis=1), ))
-            plt.colorbar(im, ax=axes[1])
-            axes[1].set_title('pred')
+            tb_logger.add_images("Validate/diff", self.normalize_images(x.detach()[:tb_log_limit_images]-pred.detach()[:tb_log_limit_images]), n_iter) # only images of the last batch
             
             if hasattr(self.model, 'get_suppl'):
                 suppls_dict = self.model.get_suppl()
@@ -116,6 +110,15 @@ class FittingTrainer(object):
                     plt.colorbar(im, ax=axes[0,i])
                     axes[0,i].set_title(key)
         
+        if show_images:
+            fig, axes = plt.subplots(2, 1, figsize=(min([x.shape[0], tb_log_limit_images])*4, 3*2))
+            im=axes[0].imshow(np.hstack(x.detach()[:tb_log_limit_images].mean(axis=1), ))
+            plt.colorbar(im, ax=axes[0])
+            axes[0].set_title('data')
+            axes[1].imshow(np.hstack(pred.detach()[:tb_log_limit_images].mean(axis=1), ))
+            plt.colorbar(im, ax=axes[1])
+            axes[1].set_title('pred')
+        
     def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=SummaryWriter()):
         """
         
@@ -124,7 +127,7 @@ class FittingTrainer(object):
             self.train_single_epoch(epoch_i, tb_logger=tb_logger)
             
             if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
-                self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger)
+                self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger, show_images=(epoch_i+1)==n_epoch)
                 
     def normalize_images(self, img, vmin=None, vmax=None):
         if vmin is None:

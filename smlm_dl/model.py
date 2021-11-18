@@ -64,7 +64,8 @@ class EncoderModel(nn.Module):
     
 class BaseFitModel(EncoderModel):
     params_ref = dict()
-    def __init__(self, renderer_class, img_size=(32,32), fit_params=['x', 'y', 'sig'], max_psf_count=1, params_ref_override={}, *args, **kwargs):
+    
+    def __init__(self, renderer_class, img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={}, *args, **kwargs):
         self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override)
         EncoderModel.__init__(self, img_size=img_size, last_out_channels=self.n_fit_params, *args, **kwargs)
         self.renderer = renderer_class(self.img_size, self.fit_params)
@@ -296,7 +297,6 @@ class Template2DRenderer(BaseRendererModel):
         template = self.template(None)
         template = self.template_render(template)
         template = template * self.hann_window
-        template = template / torch.amax(template)
         
         template = nn.functional.pad(template.unsqueeze(0), (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2, mode='replicate')[0]
         template_fft = torch.fft.fft2(template)

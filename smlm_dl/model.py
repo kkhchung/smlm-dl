@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 import warnings
 
 class EncoderModel(nn.Module):
-    def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2):
+    def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0):
         nn.Module.__init__(self)
         if not(depth == 3) or not(img_size==(32,32)):
             warnings.warn("Not actually tested with other images sizes or model depth. On TODO list.")
@@ -20,47 +20,88 @@ class EncoderModel(nn.Module):
         self.test = nn.Parameter(torch.ones(32, 32))
         
         self.encoders = nn.ModuleDict()
+        self.skips = nn.ModuleDict()
+        
         for i in range(self.depth):
             in_channels = 1 if i == 0 else 2**(i-1) * first_layer_out_channels
             out_channels = 2**i * first_layer_out_channels
-
-            self.encoders["conv_layer{}".format(i)] = self._conv_block(in_channels, out_channels)
-            self.encoders["pool_layer{}".format(i)] = nn.MaxPool2d(2)
-            self.encoders["dropout_layer{}".format(i)] = nn.Dropout2d(0.5)
+            
+            if skip_channels > 0:
+                in_shape = (int(img_size[0] * 0.5**i), int(img_size[1] * 0.5**i))
+                self.skips["skip_conv_layer{}".format(i)] = self._skip_block(in_channels, skip_channels, in_shape)
+            self.encoders["conv_layer{}".format(i)] = self._encode_block(in_channels, out_channels)
             
         self.neck = nn.ModuleDict()
-        self.neck["conv"] = self._conv_block(int(2**(self.depth-1) * first_layer_out_channels),
+        self.neck["conv_layer_0"] = self._neck_block(int(2**(self.depth-1) * first_layer_out_channels),
                                              (2**(self.depth) * first_layer_out_channels))
-        self.neck["dropout"] = nn.Dropout2d(0.5)
+        self.neck["conv_layer_1"] = self._encode_final_block(2**(self.depth) * first_layer_out_channels,
+                                                             2**(self.depth-1) * first_layer_out_channels)
         
         self.decoders = nn.ModuleDict()
-        self.decoders["conv_layer"] = nn.Sequential(            
-            nn.Conv2d(2**(self.depth) * first_layer_out_channels, last_out_channels, kernel_size=2, padding=0),
-            nn.ReLU(),
-            nn.Conv2d(last_out_channels, last_out_channels, kernel_size=3, padding=0),
-            # nn.Tanh(), # need to define last activation in the full models
-            )
+        self.decoders["dense_layer_0"] = nn.Conv2d(2**(self.depth-1) * first_layer_out_channels + skip_channels*self.depth, last_out_channels, kernel_size=1, padding=0)
         
     def forward(self, x):
-        for i, (key, module) in enumerate(self.encoders.items()):
-            x = module(x)
+        skips = dict()
+        
+        if len(self.skips) > 0:        
+            for i, ((encoder_key, encoder_module), (skip_key, skip_module)) in enumerate(zip(self.encoders.items(), self.skips.items())):
+                skips[skip_key] = skip_module(x)
+                x = encoder_module(x)
+        else:
+            for i, (key, module) in enumerate(self.encoders.items()):
+                x = module(x)
             
         for i, (key, module) in enumerate(self.neck.items()):
             x = module(x)
-            
+
+        x = torch.cat([x] + list(skips.values()), dim=1)
         for i, (key, module) in enumerate(self.decoders.items()):
             x = module(x)
             
         return x
     
-    def _conv_block(self, in_channels, out_channels):    
+    def _skip_block(self, in_channels, out_channels, in_shape):
+        return nn.Sequential(            
+            nn.GroupNorm(in_channels, in_channels),
+            nn.Conv2d(in_channels, out_channels, kernel_size=in_shape, padding=0),
+            nn.ReLU(),
+            nn.GroupNorm(out_channels, out_channels),
+            nn.Conv2d(out_channels, out_channels, kernel_size=1, padding=0),
+            nn.ReLU(),
+            nn.Dropout2d(0.5),
+        )
+    
+    def _encode_block(self, in_channels, out_channels):
         return nn.Sequential(
             nn.GroupNorm(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.ReLU(),
+            nn.GroupNorm(out_channels, out_channels),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.ReLU(),
+            nn.MaxPool2d(2),
+            nn.Dropout2d(0.5),
         )
+    
+    def _neck_block(self, in_channels, out_channels):
+        return nn.Sequential(
+            nn.GroupNorm(in_channels, in_channels),
+            nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.GroupNorm(out_channels, out_channels),
+            nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.Dropout2d(0.5),
+        )
+    
+    def _encode_final_block(self, in_channels, out_channels):
+        return nn.Sequential(
+            nn.GroupNorm(in_channels, in_channels),
+            nn.Conv2d(in_channels, out_channels, kernel_size=4, padding=0),
+            nn.ReLU(),
+        )
+    
+
     
 class BaseFitModel(EncoderModel):
     params_ref = dict()

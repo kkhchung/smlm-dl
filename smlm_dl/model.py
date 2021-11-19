@@ -12,12 +12,13 @@ import warnings
 class EncoderModel(nn.Module):
     def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0):
         nn.Module.__init__(self)
-        if not(depth == 3) or not(img_size==(32,32)):
-            warnings.warn("Not actually tested with other images sizes or model depth. On TODO list.")
+        if img_size[0] % 2 != 0 or img_size[1] % 2 !=0:
+            raise Exception("Image input size needs to be multiples of two.")
+        if 2**depth > img_size[0] or 2**depth > img_size[1]:
+            raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
             
         self.depth = depth
         self.img_size = img_size
-        self.test = nn.Parameter(torch.ones(32, 32))
         
         self.encoders = nn.ModuleDict()
         self.skips = nn.ModuleDict()
@@ -35,7 +36,8 @@ class EncoderModel(nn.Module):
         self.neck["conv_layer_0"] = self._neck_block(int(2**(self.depth-1) * first_layer_out_channels),
                                              (2**(self.depth) * first_layer_out_channels))
         self.neck["conv_layer_1"] = self._encode_final_block(2**(self.depth) * first_layer_out_channels,
-                                                             2**(self.depth-1) * first_layer_out_channels)
+                                                             2**(self.depth-1) * first_layer_out_channels,
+                                                            tuple(int(size*0.5**self.depth) for size in self.img_size))
         
         self.decoders = nn.ModuleDict()
         self.decoders["dense_layer_0"] = nn.Conv2d(2**(self.depth-1) * first_layer_out_channels + skip_channels*self.depth, last_out_channels, kernel_size=1, padding=0)
@@ -50,7 +52,7 @@ class EncoderModel(nn.Module):
         else:
             for i, (key, module) in enumerate(self.encoders.items()):
                 x = module(x)
-            
+        
         for i, (key, module) in enumerate(self.neck.items()):
             x = module(x)
 
@@ -94,10 +96,10 @@ class EncoderModel(nn.Module):
             nn.Dropout2d(0.5),
         )
     
-    def _encode_final_block(self, in_channels, out_channels):
+    def _encode_final_block(self, in_channels, out_channels, image_shape):
         return nn.Sequential(
             nn.GroupNorm(in_channels, in_channels),
-            nn.Conv2d(in_channels, out_channels, kernel_size=4, padding=0),
+            nn.Conv2d(in_channels, out_channels, kernel_size=image_shape, padding=0),
             nn.ReLU(),
         )
     

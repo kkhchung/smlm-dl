@@ -2,16 +2,26 @@ import numpy as np
 from torch.utils.data import Dataset
 from matplotlib import pyplot as plt
 import math
+import enum
+
+@enum.unique
+class Augmentation(enum.Enum):
+    PIXEL_SHIFT = 1
+    NOISE_GAUSSIAN =2
 
 class SimulatedPSFDataset(Dataset):
     """
     Base class.
     """
     def __init__(self, out_size=(32, 32), length=512, dropout_p=0, random_z=False, psf_params={'A':[500,2000], 'bg':[0,100]},
-                 noise_params={'poisson':True, 'gaussian':10}, normalize=True, padding=[8,8], *args, **kwargs):
+                 noise_params={'poisson':True, 'gaussian':10}, normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]}, *args, **kwargs):
         Dataset.__init__(self)
         
-        self.padding = padding # x, y
+        for key in augmentations:
+            if not isinstance(key, Augmentation):
+                raise Exception("Augmentation '{}' not recognized. Use Augmentation enum.".format(key))
+        self.augmentations = augmentations
+        self.padding = augmentations.get(Augmentation.PIXEL_SHIFT, [0,0]) # x, y
         self.gen_size = (out_size[0]+2*self.padding[0], out_size[1]+2*self.padding[1])
         self.out_size = out_size
         
@@ -33,11 +43,11 @@ class SimulatedPSFDataset(Dataset):
             bg = psf_params['bg']
         
         self.random_z = random_z
-        self.shifts = list([np.random.uniform(-out_size[0]/3+self.padding[0], out_size[0]/3-self.padding[0], np.prod(output_psfs_shape)),
-                            np.random.uniform(-out_size[1]/3+self.padding[1], out_size[1]/3-self.padding[1], np.prod(output_psfs_shape)),                                
+        self.shifts = list([np.random.uniform(-out_size[0]/3+self.padding[0]/2, out_size[0]/3-self.padding[0]/2, np.prod(output_psfs_shape)),
+                            np.random.uniform(-out_size[1]/3+self.padding[1]/2, out_size[1]/3-self.padding[1]/2, np.prod(output_psfs_shape)),                                
                             ])
         if self.random_z:
-            self.shifts.append(np.random.uniform(-2*np.pi, 2*np.pi, np.prod(output_psfs_shape)))
+            self.shifts.append(np.random.uniform(-10, 10, np.prod(output_psfs_shape)))
         self.shifts = np.stack(self.shifts, axis=-1)
             
         # print(np.prod(output_psfs_shape))
@@ -79,10 +89,21 @@ class SimulatedPSFDataset(Dataset):
         return self.psfs.shape[0]
 
     def __getitem__(self, key):
-        shift = [np.random.randint(0, 2*i+1) for i in self.padding]
-        if self.random_z:
-            shift.append(0)
-        return self.psfs[key][:,shift[0]:shift[0]+self.out_size[0],shift[1]:shift[1]+self.out_size[1]], self.shifts[key] + shift # have not checked shifts
+        image = self.psfs[key]
+        label = self.shifts[key]
+        
+        if Augmentation.PIXEL_SHIFT in self.augmentations:
+            shift = [np.random.randint(0, 2*i+1) for i in self.padding]
+            if self.random_z:
+                shift.append(0)
+            image = image[:,shift[0]:shift[0]+self.out_size[0],shift[1]:shift[1]+self.out_size[1]]
+            label = label + shift
+            
+        if Augmentation.NOISE_GAUSSIAN in self.augmentations:
+            noise_sig = self.augmentations[Augmentation.NOISE_GAUSSIAN] * (image.max() - image.min())
+            image = np.random.normal(image, noise_sig).astype(np.float32)
+            
+        return image, label
         
 
 class Gaussian2DPSFDataset(SimulatedPSFDataset):

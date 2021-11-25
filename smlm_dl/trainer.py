@@ -85,7 +85,7 @@ class FittingTrainer(object):
         self.current_state['epoch'] = epoch_i
         self.current_state['loss'] = loss
         if not tb_logger is None:
-            self.current_state['filename'] = os.path.split(tb_logger.log_dir)[1]
+            self.current_state['filename'] = os.path.split(tb_logger.get_logdir())[-1]
             self.current_state['log_path'] = tb_logger.log_dir
                 
     def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=16, show_images=True):
@@ -130,15 +130,24 @@ class FittingTrainer(object):
             plt.colorbar(im, ax=axes[1])
             axes[1].set_title('pred')
         
-    def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=SummaryWriter()):
+    def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=None, checkpoint_interval=1000):
         """
         
-        """
+        """        
+        if tb_logger is None:
+            tb_logger = SummaryWriter()
+        
+        if True: # always pickle the model on running
+            self.save_model(os.path.split(tb_logger.get_logdir())[-1])
+        
         for epoch_i in range(n_epoch):
             self.train_single_epoch(epoch_i, tb_logger=tb_logger)
             
             if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
                 self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger, show_images=(epoch_i+1)==n_epoch)
+                
+            if ((epoch_i+1) % checkpoint_interval == 0) or ((epoch_i+1)==n_epoch):
+                self.save_checkpoint()
                 
     def normalize_images(self, img, vmin=None, vmax=None):
         if vmin is None:
@@ -156,7 +165,7 @@ class FittingTrainer(object):
         state_dict.update(self.current_state)
         if not filename is None:
             state_dict["filename"] = filename
-        save_path = os.path.join("checkpoints", state_dict["filename"] + ".pt")
+        save_path = os.path.join("checkpoints", state_dict["filename"] + ".ptc")
         torch.save(state_dict, save_path)
         
         print("Saved to : {}".format(save_path))
@@ -185,7 +194,7 @@ class FittingTrainer(object):
         path = self.current_state.pop("filename", None)
         if not filename is None:
             path = filename
-        save_path = os.path.join("models", path + ".mod")
+        save_path = os.path.join("models", path + ".ptm")
         torch.save(self.model, save_path)
         print("Saved to : {}".format(save_path))
         

@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import math
 import enum
 import scipy
-from scipy import ndimage
+from scipy import ndimage, signal
 
 @enum.unique
 class Augmentation(enum.Enum):
@@ -227,6 +227,11 @@ def inspect_images(dataset, indices=None):
         im = axes[i].imshow(dataset[val][0][0])
         plt.colorbar(im, ax=axes[i])
         axes[i].set_title("id: {}".format(val))
+    fig, axes = plt.subplots(1, len(indices), figsize=(4*len(indices), 3))
+    for i, val in enumerate(indices):
+        im = axes[i].imshow(np.log(dataset[val][0][0]))
+        plt.colorbar(im, ax=axes[i])
+        axes[i].set_title("id: {}".format(val))
     if hasattr(dataset, 'pupil'):
         fig, axes = plt.subplots(1, 2, figsize=(4*2, 3))
         im = axes[0].imshow(np.abs(dataset.pupil))
@@ -280,27 +285,31 @@ class SingleImageDataset(Dataset):
         shift_max = [np.ceil(np.max([np.abs(shifts[:,i].min()), shifts[:,i].max()])).astype(int) for i in range(len(shifts.shape))]
         crop_size = [size[i] + 2*shift_max[i] for i in range(len(data.shape))]
         data = data[:crop_size[0],:crop_size[1]]
-        
         if not conv is None:
             data = ndimage.convolve(data, conv)
         
         # zero padding for fft
-        padding = [(int(np.ceil(1.5 * data.shape[0])),)*2, (int(np.ceil(1.5 * data.shape[1])),)*2]        
-        data = np.pad(data, padding)
-        
+        padding = [(int(np.ceil(1.5 * data.shape[0])),)*2, (int(np.ceil(1.5 * data.shape[1])),)*2]
+        data = np.pad(data, padding, mode='wrap')
+                
         kx = np.fft.fftshift(np.fft.fftfreq(data.shape[0]))
         ky = np.fft.fftshift(np.fft.fftfreq(data.shape[1]))
         self.KX, self.KY = np.meshgrid(kx, ky, indexing='ij')
         
-        fft_image = np.fft.fftshift(np.fft.fft(data))        
+        fft_image = np.fft.fftshift(np.fft.fft2(data))
         fft_image_mag = np.abs(fft_image)
         fft_image_phase = np.angle(fft_image)
         
+        # helps remove ringing artifacts
+        fft_image_mag = fft_image_mag * signal.windows.tukey(fft_image_mag.shape[0], alpha=0.5)[:,None]
+        fft_image_mag = fft_image_mag * signal.windows.tukey(fft_image_mag.shape[1], alpha=0.5)[None,:]
+        
+        # x, y shift
         fft_image_phase = fft_image_phase - 2 * np.pi * (self.KX[None,...] * shifts[:,0,None,None])
         fft_image_phase = fft_image_phase - 2 * np.pi * (self.KY[None,...] * shifts[:,1,None,None])
         
         shifted_fft = fft_image_mag * np.exp(1j * fft_image_phase)
-        shifted_img = np.fft.ifft(np.fft.ifftshift(shifted_fft))
+        shifted_img = np.fft.ifft2(np.fft.ifftshift(shifted_fft))
         
         crop = np.concatenate([shift_max[i] + padding[i] for i in range(len(data.shape))])        
         shifted_img = shifted_img[:, crop[0]:-crop[1], crop[2]:-crop[3]]

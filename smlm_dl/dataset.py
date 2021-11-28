@@ -129,7 +129,9 @@ class Gaussian2DPSFDataset(SimulatedPSFDataset):
     
     
 class FourierOpticsPSFDataset(SimulatedPSFDataset):
-    def __init__(self, out_size=(32, 32), length=512, dropout_p=0, random_z=False, psf_params={'A':[500,2000], 'bg':[0,100], 'sig_x':[2.5,2.5], 'sig_y':[2.5,2.5]},
+    def __init__(self, out_size=(32, 32), length=512, dropout_p=0, random_z=False,
+                 psf_params={'A':[500,2000], 'bg':[0,100], 'sig_x':[2.5,2.5], 'sig_y':[2.5,2.5],
+                            'apod':False, 'pupil_scale':0.75},
                  psf_zerns={},
                  noise_params={'poisson':True, 'gaussian':100},
                 *args, **kwargs):
@@ -139,21 +141,26 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
                                      noise_params=noise_params, psf_zerns=psf_zerns, *args, **kwargs)
         
         
-    def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):        
-        kx = np.fft.fftshift(np.fft.fftfreq(4*size[0]))
-        ky = np.fft.fftshift(np.fft.fftfreq(4*size[1]))
+    def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):
+        pupil_padding_factor = 4
+        pupil_padding_clip = 0.5 * (pupil_padding_factor - 1)
+        kx = np.fft.fftshift(np.fft.fftfreq(pupil_padding_factor*size[0]))
+        ky = np.fft.fftshift(np.fft.fftfreq(pupil_padding_factor*size[1]))
         self.KX, self.KY = np.meshgrid(kx, ky, indexing='ij')
         
-        us = np.linspace(-5, 5, 4*size[0])
-        vs = np.linspace(-5, 5, 4*size[1])
+        us = np.linspace(-1, 1, pupil_padding_factor*size[0]) *pupil_padding_factor / psf_params.get('pupil_scale', 0.75)
+        vs = np.linspace(-1, 1, pupil_padding_factor*size[1]) *pupil_padding_factor / psf_params.get('pupil_scale', 0.75)
         US, VS = np.meshgrid(us, vs, indexing='ij')
         R = np.sqrt(US**2 + VS**2)
-        pupil_mag = np.sqrt(1-np.minimum(R, 1)**2)
-        # pupil_phase = np.zeros(pupil_mag.shape)
-        pupil_phase = self.calculate_pupil_phase(R*(R<=1), np.arctan2(US, VS), kwargs.pop("psf_zerns", {}))
+        
+        if psf_params.get('apod', False):
+            pupil_mag = np.sqrt(1-np.minimum(R, 1)**2)
+        else:
+            pupil_mag = (R <= 1).astype(np.float)
+        pupil_phase = self.calculate_pupil_phase(R*(R<=1), np.arctan2(US, VS), kwargs.get("psf_zerns", {}))
         
         self.pupil = pupil_mag * np.exp(1j*pupil_phase)        
-        self.pupil = self.pupil[int(1.5*size[0]):int(-1.5*size[0]), int(1.5*size[1]):int(-1.5*size[1])]
+        self.pupil = self.pupil[int(pupil_padding_clip*size[0]):int(-pupil_padding_clip*size[0]), int(pupil_padding_clip*size[1]):int(-pupil_padding_clip*size[1])]
         
         shifted_pupil_phase = np.tile(pupil_phase, (shifts.shape[0], 1, 1))
         shifted_pupil_phase = shifted_pupil_phase - 2 * np.pi * (self.KX[None,...] * shifts[:,0,None,None])
@@ -161,13 +168,10 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         if self.random_z:
             shifted_pupil_phase = shifted_pupil_phase + np.sqrt(1-np.minimum(R, 1)**2) * shifts[:,2,None,None]        
         
-        # pupil = np.fft.fftshift(pupil)
-        # shifted_pupils = pupil[None,...]*np.exp(-2j*np.pi*(self.kx*shifts[:,0,None,None] + self.ky*shifts[:,1,None,None]))
-        # # shifted_pupils = np.stack([pupil,]*length)
         shifted_pupils = pupil_mag[None,...]*np.exp(1j*shifted_pupil_phase)
         
         psfs = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(shifted_pupils)))
-        psfs = psfs[:, int(1.5*size[0]):int(-1.5*size[0]), int(1.5*size[1]):int(-1.5*size[1])]
+        psfs = psfs[:, int(pupil_padding_clip*size[0]):int(-pupil_padding_clip*size[0]), int(pupil_padding_clip*size[1]):int(-pupil_padding_clip*size[1])]
         psfs = np.abs(psfs)**2
         
         psfs -= psfs.min(axis=(1,2), keepdims=True)

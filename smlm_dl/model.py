@@ -10,7 +10,7 @@ from matplotlib import pyplot as plt
 import warnings
 
 class EncoderModel(nn.Module):
-    def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0):
+    def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0, *args, **kwargs):
         nn.Module.__init__(self)
         if img_size[0] % 2 != 0 or img_size[1] % 2 !=0:
             raise Exception("Image input size needs to be multiples of two.")
@@ -228,9 +228,10 @@ class BaseRendererModel(nn.Module):
     params_default = dict()
     params_ind = dict()
     
-    def __init__(self, img_size):
+    def __init__(self, img_size, fit_params):
         nn.Module.__init__(self)
         self.img_size = img_size
+        self.fit_params = fit_params
         
     def forward(self, x, batch_size=None):
         return self.render_images(x, batch_size)
@@ -264,7 +265,7 @@ class Gaussian2DRenderer(BaseRendererModel):
     
     def __init__(self, img_size, fit_params):
         
-        BaseRendererModel.__init__(self, img_size,)
+        BaseRendererModel.__init__(self, img_size, fit_params)
         
         xs = torch.arange(0, self.img_size[0]) - 0.5*(self.img_size[0]-1)
         ys = torch.arange(0, self.img_size[1]) - 0.5*(self.img_size[1]-1)
@@ -299,7 +300,7 @@ class Template2DRenderer(BaseRendererModel):
         # The 2x sampling avoids the banding artifact that is probably caused by FFT subpixels shifts
         # This avoids any filtering in the spatial / fourier domain
 
-        BaseRendererModel.__init__(self, img_size,)
+        BaseRendererModel.__init__(self, img_size, fit_params)
         
         xs = torch.linspace(-1, 1, self.img_size[0]*2)
         ys = torch.linspace(-1, 1, self.img_size[1]*2)
@@ -350,63 +351,94 @@ class FourierOptics2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
         BaseFitModel.__init__(self, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, *args, **kwargs)
     
-    def get_suppl(self):
-        pupil_magnitude = self.renderer.pupil_magnitude.parameter.detach().numpy() * self.renderer.hann_window.detach().numpy()
-        pupil_phase = self.renderer.pupil_phase.parameter.detach().numpy()
-        return {'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase}
+    def get_suppl(self):        
+        pupil_magnitude, pupil_phase, pupil_prop = self.renderer._calculate_pupil()
+        return {'pupil mag':pupil_magnitude.detach().numpy(), 'pupil phase':pupil_phase.detach().numpy(), 'z propagate':pupil_prop.detach().numpy()}
 
 class FourierOptics2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params):
+    def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False}):
 
-        BaseRendererModel.__init__(self, img_size,)
+        BaseRendererModel.__init__(self, img_size, fit_params)
         
-        kx = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[0]))
-        ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]))
+        xs = torch.linspace(-1., 1., self.img_size[0]) / pupil_params['scale']
+        ys = torch.linspace(-1., 1., self.img_size[0]) / pupil_params['scale']
+        XS, YS = torch.meshgrid(xs, ys, indexing='ij')
+        R = torch.sqrt(XS**2 + YS**2)
+        if pupil_params['apod']:
+            pupil_magnitude = torch.sqrt(1-torch.minimum(R, torch.ones_like(R))**2)
+        else:
+            pupil_magnitude = (R <= 1).type(torch.float)
+        if 'pupil' in fit_params:
+            self.pupil_magnitude = nn.Sequential(
+                ParameterModule(pupil_magnitude),
+                nn.ReLU(),
+                nn.Dropout(p=0.25),
+            )
+        else:
+            self.pupil_magnitude = pupil_magnitude
+            
+        pupil_phase = torch.zeros((self.img_size[0], self.img_size[1]))
+        nn.init.xavier_normal_(pupil_phase, 0.1)
+        self.pupil_phase = nn.Sequential(
+            ParameterModule(pupil_phase),
+            nn.Identity(),
+            nn.Dropout(p=0.25),
+        )
+        
+        pupil_prop = torch.sqrt(1-torch.minimum(R, torch.ones_like(R))**2)
+        if False:
+            self.pupil_prop = nn.Sequential(
+                ParameterModule(torch.ones(1)*0.1),
+                nn.Identity(),
+                nn.Dropout(p=0.25),
+            )
+        else:
+            self.pupil_prop = pupil_prop            
+            
+        pupil_padding_factor = 4
+        pupil_padding_clip = 0.5 * (pupil_padding_factor - 1)
+        self.pupil_padding = (int(pupil_padding_clip*self.img_size[0]),)*2 + (int(pupil_padding_clip*self.img_size[1]),)*2
+        
+        kx = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[0]*pupil_padding_factor))
+        ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]*pupil_padding_factor))
         KX, KY = torch.meshgrid(kx, ky, indexing='ij')
         self.register_buffer('KX', KX, False)
-        self.register_buffer('KY', KY, False)
-        
-        xs = torch.linspace(-1., 1., self.img_size[0])
-        ys = torch.linspace(-1., 1., self.img_size[0])
-        xs, ys = torch.meshgrid(xs, ys, indexing='ij')
-        r = torch.sqrt(xs**2+ys**2)
-        hann_window = torch.cos(r)**2 * (r<=1)
-        # self.hann_window = hann_window
-        self.register_buffer('hann_window', hann_window, False)
-        
-        self.pupil_magnitude = ParameterModule(torch.ones((self.img_size[0], self.img_size[1])))
-        self.pupil_magnitude_act = nn.ReLU()
-        
-        pupil_phase_init = torch.zeros((self.img_size[0], self.img_size[1]))
-        nn.init.xavier_normal_(pupil_phase_init, 0.1)
-        self.pupil_phase = ParameterModule(pupil_phase_init)
-        self.pupil_phase_act = nn.Tanh()
+        self.register_buffer('KY', KY, False)        
     
-    def _render_images(self, mapped_params, batch_size, ):
+    def _render_images(self, mapped_params, batch_size, ):        
+        pupil_magnitude, pupil_phase, pupil_prop = self._calculate_pupil()        
+        pupil_phase = pupil_phase[None,...] * torch.ones([batch_size,]+[1,]*3)
         
-        pupil_magnitude = self.pupil_magnitude_act(self.pupil_magnitude(None))
-        pupil_magnitude = pupil_magnitude * self.hann_window
-        
-        pupil_phase = self.pupil_phase_act(self.pupil_phase(None)) * np.pi
-        pupil_phase = pupil_phase[None,...] * torch.ones(batch_size)[:,None,None,None]
+        pupil_magnitude = nn.functional.pad(pupil_magnitude, self.pupil_padding, mode='constant')
+        pupil_phase = nn.functional.pad(pupil_phase, self.pupil_padding, mode='constant')
+        pupil_prop = nn.functional.pad(pupil_prop, self.pupil_padding, mode='constant')
         
         pupil_phase = pupil_phase - np.pi * (self.KX[None,...] * mapped_params['x'])
         pupil_phase = pupil_phase - np.pi * (self.KY[None,...] * mapped_params['y'])
+        pupil_phase = pupil_phase + pupil_prop * mapped_params['z']
         
         pupil = pupil_magnitude[None,None,...] * torch.exp(1j * pupil_phase)
-        pupil = nn.functional.pad(pupil, (int(1.5*pupil.shape[2]),)*2 + (int(1.5*pupil.shape[3]),)*2, mode='constant')
 
-        shifted_pupil = torch.fft.ifftshift(pupil)
+        shifted_pupil = torch.fft.ifftshift(pupil, dim=(-2,-1))
                
-        images = torch.fft.ifftshift(torch.abs(torch.fft.ifft2(shifted_pupil))**2)
+        images = torch.fft.ifftshift(torch.abs(torch.fft.ifft2(shifted_pupil))**2, dim=(-2,-1))
         images = images / torch.amax(images, dim=(2,3), keepdims=True)
-        images = images[:,:,int(0.375*images.shape[2]):-int(0.375*images.shape[2]),
-                 int(0.375*images.shape[3]):-int(0.375*images.shape[3])]
+        images = images[:,:,self.pupil_padding[0]:-self.pupil_padding[1],
+                 self.pupil_padding[2]:-self.pupil_padding[3]]
         
         images = images * mapped_params['A'] + mapped_params['bg']
         images = images * (mapped_params['p']>0.5)
         
         return images
+    
+    def _calculate_pupil(self):
+        if 'pupil' in self.fit_params:
+            pupil_magnitude = self.pupil_magnitude(None)
+        else:
+            pupil_magnitude = self.pupil_magnitude
+        pupil_phase = self.pupil_phase(None)
+        pupil_prop = self.pupil_prop
+        return pupil_magnitude, pupil_phase, pupil_prop
 
     
 class ParameterModule(nn.Module):
@@ -418,15 +450,8 @@ class ParameterModule(nn.Module):
         nn.Module.__init__(self)
         self.parameter = nn.Parameter(*args, **kwargs)        
     
-    def forward(self, x):
+    def forward(self, x=None):
         return self.parameter
-    
-    def init_tensor(self):
-        nn.init.xavier_normal_(self.parameter)
-        shape = self.parameter.shape
-        self.parameter.data[int(shape[0]*0.375):-int(shape[0]*0.375),
-                            int(shape[1]*0.375):-int(shape[1]*0.375),
-                           ] += 0.5
     
 
 def check_model(model, dataloader):

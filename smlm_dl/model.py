@@ -289,82 +289,61 @@ class Template2DModel(BaseFitModel):
         BaseFitModel.__init__(self, renderer_class=Template2DRenderer, fit_params=fit_params, *args, **kwargs)
     
     def get_suppl(self):
-        template = self.renderer.template.parameter.detach().numpy() * self.renderer.hann_window.detach().numpy()
-        template /= template.max()
-        return {'template':template}
+        template = self.renderer._calculate_template(True).detach().numpy()
+        template_2x = self.renderer._calculate_template(False).detach().numpy()
+        return {'template':template, 'template 2x':template_2x, }
 
     
 class Template2DRenderer(BaseRendererModel):
     def __init__(self, img_size, fit_params):
+        # The 2x sampling avoids the banding artifact that is probably caused by FFT subpixels shifts
+        # This avoids any filtering in the spatial / fourier domain
 
         BaseRendererModel.__init__(self, img_size,)
         
-        xs = torch.linspace(-4, 4, self.img_size[0]*2)
-        ys = torch.linspace(-4, 4, self.img_size[0]*2)
-        xs, ys = torch.meshgrid(xs, ys, indexing='ij')
-        r = torch.sqrt(xs**2+ys**2)
-        # self.template = ParameterModule(torch.clip(1-r, min=0))
-        hann_window = torch.cos(r/4)**2 * (r<=4)        
-        self.register_buffer('hann_window', hann_window, False)
+        xs = torch.linspace(-1, 1, self.img_size[0]*2)
+        ys = torch.linspace(-1, 1, self.img_size[1]*2)
+        xs, ys = torch.meshgrid(xs, ys, indexing='ij') # Guassian init
+        gaussian = torch.exp(-(xs**2*32+ ys**2*32))
+        self.template = ParameterModule(gaussian)
+        self.template_act = nn.ReLU()
         
-        xs = torch.linspace(-1, 1, self.img_size[0]*2*2)
-        ys = torch.linspace(-1, 1, self.img_size[0]*2*2)
-        xs, ys = torch.meshgrid(xs, ys, indexing='ij')
-        r = torch.sqrt(xs**2+ys**2)
-        large_hann_window = torch.cos(r/1)**2 * (r<=1)
-        self.register_buffer('hann_window_large', large_hann_window, False)
+        self.template_pooling = nn.AvgPool2d((2,2), (2,2), padding=0)
         
-        xs = torch.linspace(-4, 4, self.img_size[0]*2)
-        ys = torch.linspace(-4, 4, self.img_size[0]*2)
-        xs, ys = torch.meshgrid(xs, ys, indexing='ij')
-        r = torch.exp(-(xs**2/1 + ys**2/1))
-        # r = r / torch.amax(r)
-        # r -= 0.5
-        # r *= 2
-        self.template = ParameterModule(r)
-        self.template_render = nn.ReLU()
-        
-        # # tempalate image stored at 4 resolution
-        # self.template = ParameterModule(torch.zeros((self.img_size[0]*2, self.img_size[1]*2)))
-        # self.template.init_tensor()
-        self.pooling = nn.AvgPool2d((3,3), (2,2), padding=(1,1))
-        
-        kx = torch.fft.fftfreq(self.img_size[0]*2*2)
-        ky = torch.fft.fftfreq(self.img_size[1]*2*2)
+        kx = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[0]*2*2))
+        ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]*2*2))
         KX, KY = torch.meshgrid(kx, ky, indexing='ij')
         self.register_buffer('KX', KX, False)
-        self.register_buffer('KY', KY, False)
+        self.register_buffer('KY', KY, False)   
     
     def _render_images(self, mapped_params, batch_size=None, ):
+        # template is padded, shifted, croped and then down-sampled
+        template = self._calculate_template()
+        padding = (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2
+        template = nn.functional.pad(template.unsqueeze(0), padding, mode='replicate')[0]
         
-        template = self.template(None)
-        template = self.template_render(template)
-        template = template * self.hann_window
+        template_fft = torch.fft.fftshift(torch.fft.fft2(template))
         
-        template = nn.functional.pad(template.unsqueeze(0), (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2, mode='replicate')[0]
-        template_fft = torch.fft.fft2(template)
-        # template_fft = torch.fft.fftshift(template)
-        
-        # shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.kx*params[:,[0]]*0.75*self.img_size[0] + self.ky*params[:,[1]]*0.75*self.img_size[1]))
         shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.KX*mapped_params['x'] + self.KY*mapped_params['y']))
-
-        shifted_fft = shifted_fft * torch.fft.fftshift(self.hann_window_large)
         
-        shifted_template = torch.abs(torch.fft.ifft2(shifted_fft))
-        # shifted_template = torch.fft.fftshift(shifted_template)
-        
+        shifted_template = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(shifted_fft, dim=(-2,-1))))
         
         shifted_template = shifted_template[:,:,
-                                            int(0.25*template.shape[0]):-int(0.25*template.shape[0]),
-                                            int(0.25*template.shape[1]):-int(0.25*template.shape[1]),
+                                            padding[0]:-padding[1],
+                                            padding[2]:-padding[3],
                                            ]
-        # print(shifted_template.shape)
-        shifted_template = self.pooling(shifted_template)
+        shifted_template = self.template_pooling(shifted_template)
         
         shifted_template = shifted_template * mapped_params['A'] + mapped_params['bg']
         shifted_template = shifted_template * (mapped_params['p']>0.5)
         
         return shifted_template
+    
+    def _calculate_template(self, pool=False):
+        template = self.template_act(self.template(None))
+        if pool:
+            template = self.template_pooling(template[None,None,...])[0,0]
+        return template
 
     
 class FourierOptics2DModel(BaseFitModel):

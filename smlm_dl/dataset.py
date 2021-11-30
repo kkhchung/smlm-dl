@@ -1,10 +1,10 @@
 import numpy as np
 from torch.utils.data import Dataset
 from matplotlib import pyplot as plt
-import math
 import enum
 import scipy
 from scipy import ndimage, signal
+import zernike
 
 @enum.unique
 class Augmentation(enum.Enum):
@@ -157,7 +157,7 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
             pupil_mag = np.sqrt(1-np.minimum(R, 1)**2)
         else:
             pupil_mag = (R <= 1).astype(np.float)
-        pupil_phase = self.calculate_pupil_phase(R*(R<=1), np.arctan2(US, VS), kwargs.get("psf_zerns", {}))
+        pupil_phase = zernike.calculate_pupil_phase(R*(R<=1), np.arctan2(US, VS), kwargs.get("psf_zerns", {}))
         
         self.pupil = pupil_mag * np.exp(1j*pupil_phase)        
         self.pupil = self.pupil[int(pupil_padding_clip*size[0]):int(-pupil_padding_clip*size[0]), int(pupil_padding_clip*size[1]):int(-pupil_padding_clip*size[1])]
@@ -178,13 +178,6 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         psfs /= psfs.max(axis=(1,2), keepdims=True)
 
         return psfs
-    
-    def calculate_pupil_phase(self, radial_distance, azimuthal_angle, zernikes):
-        pupil_phase = np.zeros(radial_distance.shape)
-        for key, val in zernikes.items():
-            pupil_phase += val * calculate_zernike(key, radial_distance, azimuthal_angle)
-            
-        return pupil_phase
 
 
 class FourierOptics2DPSFDataset(FourierOpticsPSFDataset):
@@ -195,33 +188,6 @@ class FourierOptics3DPSFDataset(FourierOpticsPSFDataset):
     def __init__(self, *args, **kwargs):
         FourierOpticsPSFDataset.__init__(self, random_z=True, *args, **kwargs)
     
-def calculate_zernike(j, radial_distance, azimuthal_angle):
-    def decode_ansi_index(j):
-        n = np.round(np.sqrt(j*2+1)-1).astype(np.int)
-        m = 2*j - n*(n+2)
-        return m, n
-    
-    def calculate_radial_polynomial(m, n, rho):
-        if (n-m) % 2 == 0:
-            ret = 0
-            for k in np.arange(0, (n-m)//2+1):
-                ret += np.power(-1, k) * math.comb(n-k, k) * math.comb(n-2*k, (n-m)//2-k) * np.power(rho, n-2*k)
-            return ret
-        else:
-            return np.zeros(rho.shape)        
-        
-    m, n = decode_ansi_index(j)
-    # print(m,n)
-        
-    z = calculate_radial_polynomial(np.abs(m), n, radial_distance)
-    
-    if m >=  0:
-        z *= np.cos(m * azimuthal_angle)
-    else:
-        z *= np.sin(np.abs(m) * azimuthal_angle)
-    
-    return z
-        
 
 def inspect_images(dataset, indices=None):
     if indices is None:

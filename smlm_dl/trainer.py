@@ -119,16 +119,17 @@ class FittingTrainer(object):
             vmax = max(x_numpy.max(), pred_numpy.max())
             
             n_col = 8
-            n_row = np.ceil(x_numpy.shape[0] / n_col).astype(int)
-            remainder = n_col - (x_numpy.shape[0] % n_row)
-            x_numpy = np.pad(x_numpy, ((0, remainder),) + ((0,0),)*(len(x_numpy.shape)-1))
-            pred_numpy = np.pad(pred_numpy, ((0, remainder),) + ((0,0),)*(len(x_numpy.shape)-1))
+            n_row = 0
+            x_numpy_tiled, _n_col, _n_row = util.tile_images(x_numpy, n_col=n_col)
+            n_row += _n_row
+            pred_numpy_tiled, _n_col, _n_row = util.tile_images(pred_numpy, n_col=n_col)
+            n_row += _n_row
             
-            fig, axes = plt.subplots(2, 1, figsize=(n_col*2, n_row*1.5*2))
-            im=axes[0].imshow(np.vstack([np.hstack(x_numpy[r*n_col:(r+1)*n_col]) for r in range(n_row)]), vmin=vmin, vmax=vmax)
+            fig, axes = plt.subplots(2, 1, figsize=(n_col*2, n_row*1.5))
+            im=axes[0].imshow(x_numpy_tiled, vmin=vmin, vmax=vmax)
             plt.colorbar(im, ax=axes[0])
             axes[0].set_title('data')
-            axes[1].imshow(np.vstack([np.hstack(pred_numpy[r*n_col:(r+1)*n_col]) for r in range(n_row)]), vmin=vmin, vmax=vmax)
+            axes[1].imshow(pred_numpy_tiled, vmin=vmin, vmax=vmax)
             plt.colorbar(im, ax=axes[1])
             axes[1].set_title('pred')
         

@@ -148,8 +148,8 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         ky = np.fft.fftshift(np.fft.fftfreq(pupil_padding_factor*size[1]))
         self.KX, self.KY = np.meshgrid(kx, ky, indexing='ij')
         
-        us = np.linspace(-1, 1, pupil_padding_factor*size[0]) *pupil_padding_factor / psf_params.get('pupil_scale', 0.75)
-        vs = np.linspace(-1, 1, pupil_padding_factor*size[1]) *pupil_padding_factor / psf_params.get('pupil_scale', 0.75)
+        us = np.linspace(-1, 1, pupil_padding_factor*size[0]) * (pupil_padding_factor*size[0]-1) / (size[0]-1)  / psf_params.get('pupil_scale', 0.75)
+        vs = np.linspace(-1, 1, pupil_padding_factor*size[1]) * (pupil_padding_factor*size[0]-1) / (size[0]-1)  / psf_params.get('pupil_scale', 0.75)
         US, VS = np.meshgrid(us, vs, indexing='ij')
         R = np.sqrt(US**2 + VS**2)
         

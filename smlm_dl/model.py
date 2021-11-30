@@ -5,9 +5,12 @@ from torch import nn
 
 # from torchinfo import summary
 
+import matplotlib
 from matplotlib import pyplot as plt
 
 import warnings
+
+import util
 
 class EncoderModel(nn.Module):
     def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0, *args, **kwargs):
@@ -289,9 +292,12 @@ class Template2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
         BaseFitModel.__init__(self, renderer_class=Template2DRenderer, fit_params=fit_params, *args, **kwargs)
     
-    def get_suppl(self):
+    def get_suppl(self, colored=False):
         template = self.renderer._calculate_template(True).detach().numpy()
         template_2x = self.renderer._calculate_template(False).detach().numpy()
+        if colored:
+            template = util.color_images(template, full_output=True)
+            template_2x = util.color_images(template_2x, full_output=True)
         return {'template':template, 'template 2x':template_2x, }
 
     
@@ -351,9 +357,16 @@ class FourierOptics2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
         BaseFitModel.__init__(self, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, *args, **kwargs)
     
-    def get_suppl(self):        
+    def get_suppl(self, colored=False):
         pupil_magnitude, pupil_phase, pupil_prop = self.renderer._calculate_pupil()
-        return {'pupil mag':pupil_magnitude.detach().numpy(), 'pupil phase':pupil_phase.detach().numpy(), 'z propagate':pupil_prop.detach().numpy()}
+        pupil_magnitude = pupil_magnitude.detach().numpy()
+        pupil_phase = pupil_phase.detach().numpy()
+        pupil_prop = pupil_prop.detach().numpy()
+        if colored:
+            pupil_magnitude = util.color_images(pupil_magnitude, full_output=True)
+            pupil_phase = util.color_images(pupil_phase, vsym=True, full_output=True)
+            pupil_prop = util.color_images(pupil_prop, full_output=True)
+        return {'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase, 'z propagate':pupil_prop}
 
 class FourierOptics2DRenderer(BaseRendererModel):
     def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False}):
@@ -470,11 +483,11 @@ def check_model(model, dataloader):
     axes[1].set_title("predicted")
     
     if hasattr(model, 'get_suppl'):
-        suppl_images = model.get_suppl()
+        suppl_images = model.get_suppl(colored=True)
         fig, axes = plt.subplots(1, len(suppl_images), figsize=(4*len(suppl_images), 3), squeeze=False)
-        for i, (key, img) in enumerate(suppl_images.items()):
+        for i, (key, (img, norm, cmap)) in enumerate(suppl_images.items()):
             im = axes[0, i].imshow(img)
-            plt.colorbar(im, ax=axes[0, i])
+            plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[0, i])
             axes[0, i].set_title(key)
         
     if hasattr(model, 'render_example_images'):

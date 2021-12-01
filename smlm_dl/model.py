@@ -469,6 +469,8 @@ class ParameterModule(nn.Module):
 
 def check_model(model, dataloader):
     features, labels = next(iter(dataloader))
+    is_training = model.training
+    model.train(False)
     pred = model(features)
     pred = pred.detach().numpy()
     
@@ -503,4 +505,6 @@ def check_model(model, dataloader):
         for i, img in enumerate(example_images):
             im = axes[0, i].imshow(np.log10(img[0]))
             plt.colorbar(im, ax=axes[0, i])
-            axes[0, i].set_title("E.g. {}".format(i))
+            axes[0, i].set_title("E.g. {}".format(i))            
+            
+    model.train(is_training)

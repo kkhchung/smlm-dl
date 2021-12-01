@@ -32,3 +32,21 @@ def calculate_pupil_phase(radial_distance, azimuthal_angle, zernikes):
     for key, val in zernikes.items():
         pupil_phase += val * calculate_pupil_from_zernike(key, radial_distance, azimuthal_angle)
     return pupil_phase
+
+def fit_zernike_from_pupil(pupil, max_j, radial_distance, azimuthal_angle):
+    mask = np.abs(pupil) > 0
+    pupil_phase = np.ma.array(np.angle(pupil))
+    radial_distance = np.ma.array(radial_distance)
+    azimuthal_angle = np.ma.array(azimuthal_angle)
+    
+    zernike_basis = list()    
+    for j in range(max_j):
+        zernike_basis.append(calculate_pupil_from_zernike(j, radial_distance, azimuthal_angle))
+    
+    zernike_coeff = {}
+    for j, basis in enumerate(zernike_basis):
+        basis = basis[~basis.mask]
+        res = np.linalg.lstsq(basis.reshape(-1, 1), pupil_phase.reshape(-1), rcond=None)
+        zernike_coeff[j] = res[0].data[0]
+    for key, val in zernike_coeff.items():
+        print("{}: {:.3f}".format(key, val))

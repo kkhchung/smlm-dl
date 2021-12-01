@@ -144,6 +144,7 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
     def generate_psfs(self, size, length, shifts, psf_params, *args, **kwargs):
         pupil_padding_factor = 4
         pupil_padding_clip = 0.5 * (pupil_padding_factor - 1)
+        pupil_padding = int(pupil_padding_clip*size[0]), int(-pupil_padding_clip*size[0]), int(pupil_padding_clip*size[1]), int(-pupil_padding_clip*size[1])
         kx = np.fft.fftshift(np.fft.fftfreq(pupil_padding_factor*size[0]))
         ky = np.fft.fftshift(np.fft.fftfreq(pupil_padding_factor*size[1]))
         self.KX, self.KY = np.meshgrid(kx, ky, indexing='ij')
@@ -160,7 +161,9 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         pupil_phase = zernike.calculate_pupil_phase(R*(R<=1), np.arctan2(US, VS), kwargs.get("psf_zerns", {}))
         
         self.pupil = pupil_mag * np.exp(1j*pupil_phase)        
-        self.pupil = self.pupil[int(pupil_padding_clip*size[0]):int(-pupil_padding_clip*size[0]), int(pupil_padding_clip*size[1]):int(-pupil_padding_clip*size[1])]
+        self.pupil = self.pupil[pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]]
+        self.pupil_suppl = {"radial_distance": (R*(R<=1))[pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]],
+                           "azimuthal_angle": np.arctan2(US, VS)[pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]]}
         
         shifted_pupil_phase = np.tile(pupil_phase, (shifts.shape[0], 1, 1))
         shifted_pupil_phase = shifted_pupil_phase - 2 * np.pi * (self.KX[None,...] * shifts[:,0,None,None])
@@ -171,7 +174,7 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         shifted_pupils = pupil_mag[None,...]*np.exp(1j*shifted_pupil_phase)
         
         psfs = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(shifted_pupils)))
-        psfs = psfs[:, int(pupil_padding_clip*size[0]):int(-pupil_padding_clip*size[0]), int(pupil_padding_clip*size[1]):int(-pupil_padding_clip*size[1])]
+        psfs = psfs[:, pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]]
         psfs = np.abs(psfs)**2
         
         psfs -= psfs.min(axis=(1,2), keepdims=True)

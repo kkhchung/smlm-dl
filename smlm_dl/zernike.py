@@ -1,5 +1,8 @@
 import numpy as np
 import math
+from skimage import restoration
+
+DEBUG = False
 
 def decode_ansi_index(j):
     n = np.round(np.sqrt(j*2+1)-1).astype(np.int)
@@ -34,10 +37,19 @@ def calculate_pupil_phase(radial_distance, azimuthal_angle, zernikes):
     return pupil_phase
 
 def fit_zernike_from_pupil(pupil, max_j, radial_distance, azimuthal_angle):
-    mask = np.abs(pupil) > 0
-    pupil_phase = np.ma.array(np.angle(pupil))
-    radial_distance = np.ma.array(radial_distance)
-    azimuthal_angle = np.ma.array(azimuthal_angle)
+    mask = np.abs(pupil) <= 0
+    
+    # unwrapping can cause error in zernike mode zero
+    pupil_phase = np.ma.array(restoration.unwrap_phase(np.angle(pupil)), mask=mask)
+    radial_distance = np.ma.array(radial_distance, mask=mask)
+    azimuthal_angle = np.ma.array(azimuthal_angle, mask=mask)
+    
+    if DEBUG:
+        import matplotlib.pyplot as plt
+        fig, axes = plt.subplots(1, 3, figsize=(4*3, 3))
+        axes[0].imshow(pupil_phase)
+        axes[1].imshow(radial_distance)
+        axes[2].imshow(azimuthal_angle)
     
     zernike_basis = list()    
     for j in range(max_j):
@@ -45,8 +57,24 @@ def fit_zernike_from_pupil(pupil, max_j, radial_distance, azimuthal_angle):
     
     zernike_coeff = {}
     for j, basis in enumerate(zernike_basis):
-        basis = basis[~basis.mask]
         res = np.linalg.lstsq(basis.reshape(-1, 1), pupil_phase.reshape(-1), rcond=None)
         zernike_coeff[j] = res[0].data[0]
-    for key, val in zernike_coeff.items():
-        print("{}: {:.3f}".format(key, val))
+
+    if DEBUG:
+        for key, val in zernike_coeff.items():
+            print("{}: {:.3f}".format(key, val))
+    
+    return zernike_coeff
+
+def plot_zernike_coeffs(ax, zernike_coeffs):
+    ax.axhline(0, c='black')
+    ax.bar(zernike_coeffs.keys(), zernike_coeffs.values())
+    for key, val in zernike_coeffs.items():
+        ax.annotate("{:.2f}".format(val), (key, val+np.sign(val)*0.1), ha='center', va='bottom' if (np.sign(val)>=0) else 'top')
+    ticks = list(zernike_coeffs.keys())
+    ax.set_xlim(0-0.5, max(ticks)+0.5)
+    ax.set_xticks(ticks)
+    ax.set_xticklabels(["{}".format(t) for t in ticks], fontsize='small')
+    ax.set_xlabel("zernike mode")
+    y_lim = max(-1*min(zernike_coeffs.values()), max(zernike_coeffs.values())) * 1.3
+    ax.set_ylim(-y_lim, y_lim)

@@ -1,10 +1,12 @@
 import numpy as np
 from torch.utils.data import Dataset
+import matplotlib
 from matplotlib import pyplot as plt
 import enum
 import scipy
 from scipy import ndimage, signal
-import zernike
+import zernike, util
+from skimage import restoration
 
 @enum.unique
 class Augmentation(enum.Enum):
@@ -194,23 +196,49 @@ class FourierOptics3DPSFDataset(FourierOpticsPSFDataset):
 
 def inspect_images(dataset, indices=None):
     if indices is None:
-        indices = np.random.choice(dataset.images.shape[0], 5, replace=False)
-    fig, axes = plt.subplots(1, len(indices), figsize=(4*len(indices), 3))
-    for i, val in enumerate(indices):
-        im = axes[i].imshow(dataset[val][0][0])
-        plt.colorbar(im, ax=axes[i])
-        axes[i].set_title("id: {}".format(val))
-    fig, axes = plt.subplots(1, len(indices), figsize=(4*len(indices), 3))
-    for i, val in enumerate(indices):
-        im = axes[i].imshow(np.log(dataset[val][0][0]))
-        plt.colorbar(im, ax=axes[i])
-        axes[i].set_title("id: {}".format(val))
+        indices = np.random.choice(len(dataset), 8, replace=False)
+    images = []
+    labels = []
+    for i in indices:
+        images.append(dataset[i][0].mean(0))
+        labels.append(dataset[i][1])
+    
+    tiled_images, n_col, n_row  = util.tile_images(np.stack(images))
+    
+    fig, axes = plt.subplots(2, 1, figsize=(4*n_col, 3*n_row*2))    
+    im = axes[0].imshow(tiled_images)
+    plt.colorbar(im, ax=axes[0])
+    im = axes[1].imshow(np.log(tiled_images))
+    plt.colorbar(im, ax=axes[1])
+    
+    for i, id in enumerate(indices):
+        label = "{}:".format(id)
+        for text in labels[i]:
+            label += " {:.1f},".format(text)
+        for j in range(2):
+            axes[j].text(i%n_col / n_col, i//n_col / n_row, label, bbox={'facecolor':'white', 'alpha':1},
+                         ha='left', va='bottom',
+                         fontsize='medium',
+                         transform=axes[j].transAxes)
+    
     if hasattr(dataset, 'pupil'):
-        fig, axes = plt.subplots(1, 2, figsize=(4*2, 3))
-        im = axes[0].imshow(np.abs(dataset.pupil))
-        plt.colorbar(im, ax=axes[0])
-        im = axes[1].imshow(np.angle(dataset.pupil))
-        plt.colorbar(im, ax=axes[1])
+        fig, axes = plt.subplots(1, 3, figsize=(4*2 + 8, 3), gridspec_kw={'width_ratios': [1,1,3]})
+        pupil_magnitude = np.abs(dataset.pupil)
+        pupil_magnitude_colored, norm, cmap = util.color_images(pupil_magnitude, full_output=True)
+        im = axes[0].imshow(pupil_magnitude_colored)
+        plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[0])
+        axes[0].set_title('pupil mag')
+        
+        pupil_phase = restoration.unwrap_phase(np.angle(dataset.pupil))
+        pupil_phase_colored, norm, cmap = util.color_images(pupil_phase, vsym=True, full_output=True)
+        im = axes[1].imshow(pupil_phase_colored)
+        plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[1])
+        axes[1].set_title('pupil phase')
+        
+        zernike_coeffs = zernike.fit_zernike_from_pupil(dataset.pupil, 16, dataset.pupil_suppl["radial_distance"], dataset.pupil_suppl["azimuthal_angle"])        
+        zernike.plot_zernike_coeffs(axes[2], zernike_coeffs)
+        
+        fig.tight_layout()
 
 
 class SingleImageDataset(Dataset):

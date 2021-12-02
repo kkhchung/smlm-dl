@@ -28,6 +28,7 @@ class SimulatedPSFDataset(Dataset):
         self.padding = augmentations.get(Augmentation.PIXEL_SHIFT, [0,0]) # x, y
         self.gen_size = (out_size[0]+2*self.padding[0], out_size[1]+2*self.padding[1])
         self.out_size = out_size
+        self.params = {}
         
         if isinstance(length, int):
             output_psfs_shape = [length, 1]
@@ -47,25 +48,29 @@ class SimulatedPSFDataset(Dataset):
             bg = psf_params['bg']
         
         self.random_z = random_z
-        self.shifts = list([np.random.uniform(-out_size[0]/3+self.padding[0]/2, out_size[0]/3-self.padding[0]/2, np.prod(output_psfs_shape)),
-                            np.random.uniform(-out_size[1]/3+self.padding[1]/2, out_size[1]/3-self.padding[1]/2, np.prod(output_psfs_shape)),                                
+        self.shifts = list([np.random.uniform(-out_size[0]/3+self.padding[0]/2, out_size[0]/3-self.padding[0]/2, output_psfs_shape),
+                            np.random.uniform(-out_size[1]/3+self.padding[1]/2, out_size[1]/3-self.padding[1]/2, output_psfs_shape),                                
                             ])
+        self.params['x'], self.params['y'] = self.shifts
         if self.random_z:
-            self.shifts.append(np.random.uniform(-10, 10, np.prod(output_psfs_shape)))
-        self.shifts = np.stack(self.shifts, axis=-1)
+            self.shifts.append(np.random.uniform(-10, 10, output_psfs_shape))
+            self.params['z'] = self.shifts[-1]
+        self.shifts = np.stack([arr.flatten() for arr in self.shifts], axis=-1)
             
         # print(np.prod(output_psfs_shape))
-        psfs = self.generate_psfs(self.gen_size, np.prod(output_psfs_shape), self.shifts, psf_params, *args, **kwargs) #assumes normalized from 0 to 1
+        psfs = self.generate_psfs(self.gen_size, output_psfs_shape, self.shifts, psf_params, *args, **kwargs) #assumes normalized from 0 to 1
         
         if dropout_p > 0:
             psfs = psfs * (np.random.rand(psfs.shape[0], 1, 1) > dropout_p)
         
-        psfs = psfs * np.random.uniform(A[0], A[1], psfs.shape[0])[:, None, None]
+        self.params['A'] = np.random.uniform(A[0], A[1], output_psfs_shape)
+        psfs = psfs * self.params['A'].reshape(-1, 1, 1)
         
         psfs = psfs.reshape(output_psfs_shape[0], output_psfs_shape[1], psfs.shape[1], psfs.shape[2])
         psfs = psfs.sum(axis=1)
         
-        psfs = psfs + np.random.uniform(bg[0], bg[1], output_psfs_shape[0])[:, None, None]
+        self.params['bg'] = np.random.uniform(bg[0], bg[1], output_psfs_shape[0])
+        psfs = psfs + self.params['bg'].reshape(-1, 1, 1)
         # print(psfs.dtype)
         
         if len(noise_params) > 0:
@@ -123,8 +128,10 @@ class Gaussian2DPSFDataset(SimulatedPSFDataset):
         XS, YS = np.meshgrid(xs, ys, indexing='ij')
         # print(shifts.shape)
         # print(psf_params['sig_x'].dtype)
-        ret = np.exp(-((XS[None,...]-shifts[:,0,None,None])**2/(2*np.random.uniform(*psf_params['sig_x'], (length, 1,1))) \
-                       + (YS[None,...]-shifts[:,1,None,None])**2/(2*np.random.uniform(*psf_params['sig_x'], (length, 1,1)))))
+        self.params['sig_x'] = np.random.uniform(*psf_params['sig_x'], length)
+        self.params['sig_y'] = np.random.uniform(*psf_params['sig_y'], length)
+        ret = np.exp(-((XS[None,...]-shifts[:,0,None,None])**2/(2*self.params['sig_x'].reshape(-1,1,1)) \
+                       + (YS[None,...]-shifts[:,1,None,None])**2/(2*self.params['sig_y'].reshape(-1,1,1))))
         ret -= ret.min(axis=(1,2), keepdims=True)
         ret /= ret.max(axis=(1,2), keepdims=True)
         return ret

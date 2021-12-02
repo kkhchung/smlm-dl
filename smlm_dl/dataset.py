@@ -229,7 +229,7 @@ def inspect_images(dataset, indices=None):
         plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[0])
         axes[0].set_title('pupil mag')
         
-        pupil_phase = restoration.unwrap_phase(np.angle(dataset.pupil))
+        pupil_phase = restoration.unwrap_phase(np.ma.array(np.angle(dataset.pupil), mask=np.abs(dataset.pupil)<=0))
         pupil_phase_colored, norm, cmap = util.color_images(pupil_phase, vsym=True, full_output=True)
         im = axes[1].imshow(pupil_phase_colored)
         plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[1])

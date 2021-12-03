@@ -114,14 +114,6 @@ class FittingTrainer(object):
         if not tb_logger is None:
             self.log_to_tensorboard(tb_logger, "Validate", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
             self.log_param_to_tensorboard(tb_logger, "Validate", n_iter, y_params, pred_params)
-            
-            if hasattr(self.model, 'get_suppl'):
-                suppls_dict = self.model.get_suppl(colored=True)
-                fig, axes = plt.subplots(1, len(suppls_dict), figsize=(len(suppls_dict)*4, 3), squeeze=False)
-                for i, (key, (img, norm, cmap)) in enumerate(suppls_dict.items()):
-                    im=axes[0,i].imshow(img)
-                    plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[0,i])
-                    axes[0,i].set_title(key)
         
         if show_images:
             x_numpy = x[:tb_log_limit_images].detach().numpy().mean(axis=1)
@@ -174,9 +166,10 @@ class FittingTrainer(object):
         tb_logger.add_images("{}/diff".format(label), util.color_images(pred_numpy-x_numpy, vmin=vmin, vmax=vmax, vsym=True), n_iter)
         
         if hasattr(self.model, 'get_suppl'):
-            suppls_dict = self.model.get_suppl(colored=True)
-            for i, (key, (img, norm, cmap)) in enumerate(suppls_dict.items()):
-                tb_logger.add_image("{}/{}".format(label, key), img, n_iter, dataformats="HWC")
+            suppl_dict = self.model.get_suppl(colored=True)
+            if 'images' in suppl_dict:
+                for i, (key, (img, norm, cmap)) in enumerate(suppl_dict['images'].items()):
+                    tb_logger.add_image("{}/{}".format(label, key), img, n_iter, dataformats="HWC")
                 
     def log_param_to_tensorboard(self, tb_logger, label, n_iter, y, pred, params=['x','y','z']):
         for param in params:

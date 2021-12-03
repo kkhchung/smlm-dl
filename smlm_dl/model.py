@@ -1,3 +1,4 @@
+import functools
 import numpy as np
 
 import torch
@@ -10,7 +11,7 @@ from matplotlib import pyplot as plt
 
 import warnings
 
-import util
+import util, zernike
 
 class EncoderModel(nn.Module):
     def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0, *args, **kwargs):
@@ -114,7 +115,7 @@ class BaseFitModel(EncoderModel):
     def __init__(self, renderer_class, img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={}, *args, **kwargs):
         self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override)
         EncoderModel.__init__(self, img_size=img_size, last_out_channels=self.n_fit_params, *args, **kwargs)
-        self.renderer = renderer_class(self.img_size, self.fit_params)
+        self.renderer = renderer_class(self.img_size, self.fit_params, *args, **kwargs)
         
     def forward(self, x):
         x = EncoderModel.forward(self, x)
@@ -267,7 +268,7 @@ class Gaussian2DModel(BaseFitModel):
     
 class Gaussian2DRenderer(BaseRendererModel):
     
-    def __init__(self, img_size, fit_params):
+    def __init__(self, img_size, fit_params, *args, **kwargs):
         
         BaseRendererModel.__init__(self, img_size, fit_params)
         
@@ -299,11 +300,12 @@ class Template2DModel(BaseFitModel):
         if colored:
             template = util.color_images(template, full_output=True)
             template_2x = util.color_images(template_2x, full_output=True)
-        return {'template':template, 'template 2x':template_2x, }
+        return {'images': {'template':template, 'template 2x':template_2x, },
+               }
 
     
 class Template2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params):
+    def __init__(self, img_size, fit_params, *args, **kwargs):
         # The 2x sampling avoids the banding artifact that is probably caused by FFT subpixels shifts
         # This avoids any filtering in the spatial / fourier domain
 
@@ -363,11 +365,18 @@ class FourierOptics2DModel(BaseFitModel):
         pupil_magnitude = pupil_magnitude.detach().numpy()
         pupil_phase = pupil_phase.detach().numpy()
         pupil_prop = pupil_prop.detach().numpy()
+        
+        zern_coeffs = zernike.fit_zernike_from_pupil(pupil_magnitude*np.exp(1j*pupil_phase), 16, self.renderer.R, np.arctan2(self.renderer.US, self.renderer.VS))
+        zern_plot = functools.partial(zernike.plot_zernike_coeffs, zernike_coeffs=zern_coeffs)
+        
         if colored:
             pupil_magnitude = util.color_images(pupil_magnitude, full_output=True)
             pupil_phase = util.color_images(pupil_phase, vsym=True, full_output=True)
             pupil_prop = util.color_images(pupil_prop, full_output=True)
-        return {'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase, 'z propagate':pupil_prop}
+            
+        return {'images':{'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase, 'z propagate':pupil_prop},
+                'plots':{'zernike': {'plot':zern_plot, 'kwargs':{'figsize':(8,3)}}},
+               }
 
 class FourierOptics2DRenderer(BaseRendererModel):
     def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False}):
@@ -468,30 +477,39 @@ class ParameterModule(nn.Module):
         return self.parameter
     
 
-def check_model(model, dataloader):
-    features, labels = next(iter(dataloader))
+def check_model(model, dataloader=None):
     is_training = model.training
     model.train(False)
-    pred = model(features)
-    pred = pred.detach().numpy()
     
-    print("input shape: {}, output_shape: {}".format(features.shape, pred.shape))
+    if not dataloader is None:
+        features, labels = next(iter(dataloader))
+        pred = model(features)
+        pred = pred.detach().numpy()
     
-    fig, axes = plt.subplots(1, 2, figsize=(8,3))
-    im = axes[0].imshow(features[0,0])
-    plt.colorbar(im, ax=axes[0])
-    axes[0].set_title("data")
-    im = axes[1].imshow(pred[0,0])
-    plt.colorbar(im, ax=axes[1])
-    axes[1].set_title("predicted")
+        print("input shape: {}, output_shape: {}".format(features.shape, pred.shape))
+
+        fig, axes = plt.subplots(1, 2, figsize=(8,3))
+        im = axes[0].imshow(features[0,0])
+        plt.colorbar(im, ax=axes[0])
+        axes[0].set_title("data")
+        im = axes[1].imshow(pred[0,0])
+        plt.colorbar(im, ax=axes[1])
+        axes[1].set_title("predicted")
     
-    if hasattr(model, 'get_suppl'):
-        suppl_images = model.get_suppl(colored=True)
-        fig, axes = plt.subplots(1, len(suppl_images), figsize=(4*len(suppl_images), 3), squeeze=False)
-        for i, (key, (img, norm, cmap)) in enumerate(suppl_images.items()):
-            im = axes[0, i].imshow(img)
-            plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[0, i])
-            axes[0, i].set_title(key)
+    if hasattr(model, 'get_suppl'):        
+        suppl_dict = model.get_suppl(colored=True)
+        if 'images' in suppl_dict:
+            suppl_images = suppl_dict['images']
+            fig, axes = plt.subplots(1, len(suppl_images), figsize=(4*len(suppl_images), 3), squeeze=False)
+            for i, (key, (img, norm, cmap)) in enumerate(suppl_images.items()):
+                im = axes[0, i].imshow(img)
+                plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[0, i])
+                axes[0, i].set_title(key)
+        if 'plots' in suppl_dict:
+            suppl_plots = suppl_dict['plots']
+            for key, val in suppl_plots.items():
+                fig, ax = plt.subplots(1, 1, **val['kwargs'])
+                val['plot'](ax)
         
     if hasattr(model, 'render_example_images'):
         

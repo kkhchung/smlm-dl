@@ -70,7 +70,7 @@ def plot_zernike_coeffs(ax, zernike_coeffs):
     ax.axhline(0, c='black')
     ax.bar(zernike_coeffs.keys(), zernike_coeffs.values())
     for key, val in zernike_coeffs.items():
-        ax.annotate("{:.2f}".format(val), (key, val+np.sign(val)*0.1), ha='center', va='bottom' if (np.sign(val)>=0) else 'top')
+        ax.annotate("{:.2f}".format(val), (key, val), ha='center', va='bottom' if (np.sign(val)>=0) else 'top')
     ticks = list(zernike_coeffs.keys())
     ax.set_xlim(0-0.5, max(ticks)+0.5)
     ax.set_xticks(ticks)

@@ -427,8 +427,8 @@ class FourierOptics2DRenderer(BaseRendererModel):
         pupil_phase = nn.functional.pad(pupil_phase, self.pupil_padding, mode='constant')
         pupil_prop = nn.functional.pad(pupil_prop, self.pupil_padding, mode='constant')
         
-        pupil_phase = pupil_phase - np.pi * (self.KX[None,...] * mapped_params['x'])
-        pupil_phase = pupil_phase - np.pi * (self.KY[None,...] * mapped_params['y'])
+        pupil_phase = pupil_phase - 2 * np.pi * (self.KX[None,...] * mapped_params['x'])
+        pupil_phase = pupil_phase - 2 * np.pi * (self.KY[None,...] * mapped_params['y'])
         pupil_phase = pupil_phase + pupil_prop * mapped_params['z']
         
         pupil = pupil_magnitude[None,None,...] * torch.exp(1j * pupil_phase)

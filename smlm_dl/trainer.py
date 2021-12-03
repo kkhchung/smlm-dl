@@ -73,7 +73,8 @@ class FittingTrainer(object):
                 
                 if not tb_logger is None:
                     n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
-                    self.log_to_tensorboard(tb_logger, "Training", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
+                    self.log_to_tensorboard(tb_logger, "Training", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])                    
+                    self.log_param_to_tensorboard(tb_logger, "Training", n_iter, y, self.model.mapped_params)
                 
         # print("-"*100)
         
@@ -88,12 +89,21 @@ class FittingTrainer(object):
         self.model.eval()
         
         sum_loss = 0
+        y_params = {}
+        pred_params = {}
         
         with torch.no_grad():
             for batch_i, (x, y) in enumerate(self.valid_data_loader):
                 x = x.to(self.device)
                 pred = self.model(x)
-                sum_loss += self.loss_function(pred, x)
+                sum_loss += self.loss_function(pred, x)                
+                
+                for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:
+                    for key, val in new_dict.items():
+                        if key in old_dict:
+                            old_dict[key] = torch.cat([old_dict[key], torch.atleast_1d(torch.as_tensor(val))])
+                        else:
+                            old_dict[key] = torch.atleast_1d(torch.as_tensor(val))
         
         loss = sum_loss / len(self.valid_data_loader)
         
@@ -103,6 +113,7 @@ class FittingTrainer(object):
         
         if not tb_logger is None:
             self.log_to_tensorboard(tb_logger, "Validate", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
+            self.log_param_to_tensorboard(tb_logger, "Validate", n_iter, y_params, pred_params)
             
             if hasattr(self.model, 'get_suppl'):
                 suppls_dict = self.model.get_suppl(colored=True)
@@ -166,6 +177,14 @@ class FittingTrainer(object):
             suppls_dict = self.model.get_suppl(colored=True)
             for i, (key, (img, norm, cmap)) in enumerate(suppls_dict.items()):
                 tb_logger.add_image("{}/{}".format(label, key), img, n_iter, dataformats="HWC")
+                
+    def log_param_to_tensorboard(self, tb_logger, label, n_iter, y, pred, params=['x','y','z']):
+        for param in params:
+            if param in pred and param in y:
+                param_y = y[param].squeeze().detach().numpy()
+                param_pred = pred[param].squeeze().detach().numpy()
+                error = np.std(param_pred - param_y)
+                tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
     
     def save_checkpoint(self, filename=None):
         state_dict = {

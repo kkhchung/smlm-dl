@@ -120,6 +120,7 @@ class BaseFitModel(EncoderModel):
         x = EncoderModel.forward(self, x)
         batch_size = x.shape[0]
         x = self.map_params(x)
+        self.mapped_params = x
         x = self.renderer(x, batch_size)
         return x
     

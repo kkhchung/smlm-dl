@@ -1,6 +1,7 @@
 import numpy as np
 import math
 from skimage import restoration
+import torch
 
 DEBUG = False
 
@@ -31,7 +32,10 @@ def calculate_pupil_from_zernike(j, radial_distance, azimuthal_angle):
     return z
 
 def calculate_pupil_phase(radial_distance, azimuthal_angle, zernikes):
-    pupil_phase = np.zeros(radial_distance.shape)
+    if torch.is_tensor(radial_distance):
+        pupil_phase = torch.zeros(radial_distance.shape)
+    else:
+        pupil_phase = np.zeros(radial_distance.shape)
     for key, val in zernikes.items():
         pupil_phase += val * calculate_pupil_from_zernike(key, radial_distance, azimuthal_angle)
     return pupil_phase

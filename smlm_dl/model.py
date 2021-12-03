@@ -379,14 +379,18 @@ class FourierOptics2DModel(BaseFitModel):
                }
 
 class FourierOptics2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False}):
+    def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False, 'phase_init_zern':{}}, *args, **kwargs):
 
         BaseRendererModel.__init__(self, img_size, fit_params)
         
-        xs = torch.linspace(-1., 1., self.img_size[0]) / pupil_params['scale']
-        ys = torch.linspace(-1., 1., self.img_size[0]) / pupil_params['scale']
-        XS, YS = torch.meshgrid(xs, ys, indexing='ij')
-        R = torch.sqrt(XS**2 + YS**2)
+        us = torch.linspace(-1., 1., self.img_size[0]) / pupil_params['scale']
+        vs = torch.linspace(-1., 1., self.img_size[0]) / pupil_params['scale']
+        US, VS = torch.meshgrid(us, vs, indexing='ij')
+        R = torch.sqrt(US**2 + VS**2)
+        self.register_buffer('US', US, False)
+        self.register_buffer('VS', VS, False)
+        self.register_buffer('R', R, False)
+        
         if pupil_params['apod']:
             pupil_magnitude = torch.sqrt(1-torch.minimum(R, torch.ones_like(R))**2)
         else:
@@ -402,6 +406,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
             
         pupil_phase = torch.zeros((self.img_size[0], self.img_size[1]))
         nn.init.xavier_normal_(pupil_phase, 0.1)
+        pupil_phase = pupil_phase + zernike.calculate_pupil_phase(R*(R<=1), torch.atan2(US, VS), pupil_params.get("phase_init_zern", {}))
         self.pupil_phase = nn.Sequential(
             ParameterModule(pupil_phase),
             nn.Identity(),

@@ -99,14 +99,15 @@ class SimulatedPSFDataset(Dataset):
 
     def __getitem__(self, key):
         image = self.images[key]
-        label = self.shifts[key]
+        label = {param_key: param_val[key] for param_key, param_val in self.params.items()}
         
         if Augmentation.PIXEL_SHIFT in self.augmentations:
             shift = [np.random.randint(0, 2*i+1) for i in self.padding]
-            if self.random_z:
-                shift.append(0)
+            label['x'] = label['x'] - shift[0] + self.padding[0]
+            label['y'] = label['y'] - shift[1] + self.padding[1]
+            # if self.random_z:
+            #     shift.append(0)                
             image = image[:,shift[0]:shift[0]+self.out_size[0],shift[1]:shift[1]+self.out_size[1]]
-            label = label + shift
             
         if Augmentation.NOISE_GAUSSIAN in self.augmentations:
             noise_sig = self.augmentations[Augmentation.NOISE_GAUSSIAN] * (image.max() - image.min())
@@ -207,8 +208,9 @@ def inspect_images(dataset, indices=None):
     images = []
     labels = []
     for i in indices:
-        images.append(dataset[i][0].mean(0))
-        labels.append(dataset[i][1])
+        data = dataset[i]
+        images.append(data[0].mean(0))
+        labels.append(data[1])
     
     tiled_images, n_col, n_row  = util.tile_images(np.stack(images))
     
@@ -219,11 +221,18 @@ def inspect_images(dataset, indices=None):
     plt.colorbar(im, ax=axes[1])
     
     for i, id in enumerate(indices):
-        label = "{}:".format(id)
-        for text in labels[i]:
-            label += " {:.1f},".format(text)
+        label = "{}:\t".format(id)
+        for key, val in labels[i].items():
+            label += " [{} =".format(key, val.squeeze())
+            for datum in np.atleast_1d(val.squeeze()):
+                label += " {:.3f},".format(datum)
+            label += "],"
+        print(label)
         for j in range(2):
-            axes[j].text(i%n_col / n_col, i//n_col / n_row, label, bbox={'facecolor':'white', 'alpha':1},
+            axes[j].text(i%n_col / n_col, i//n_col / n_row,
+                         # label,
+                         id,
+                         bbox={'facecolor':'white', 'alpha':1},
                          ha='left', va='bottom',
                          fontsize='medium',
                          transform=axes[j].transAxes)
@@ -263,6 +272,7 @@ class SingleImageDataset(Dataset):
         self.padding = augmentations.get(Augmentation.PIXEL_SHIFT, [0,0]) # x, y
         self.gen_size = (out_size[0]+2*self.padding[0], out_size[1]+2*self.padding[1])
         self.out_size = out_size
+        self.params = dict()
                    
         A = img_params.get('A', [1,1])        
         bg = img_params.get('bg', [0,0])
@@ -272,6 +282,7 @@ class SingleImageDataset(Dataset):
         self.shifts = list([np.random.uniform(-shifts[0], shifts[0], length),
                             np.random.uniform(-shifts[1], shifts[1], length),                                
                             ])
+        self.params['x'], self.params['y'] = self.shifts
         self.shifts = np.stack(self.shifts, axis=-1)
             
         images = self.generate_images(data, self.gen_size, length, conv, self.shifts, *args, **kwargs)
@@ -335,17 +346,18 @@ class SingleImageDataset(Dataset):
     def __len__(self):
         return self.images.shape[0]
 
-    def __getitem__(self, key):
+    def __getitem__(self, key):    
         image = self.images[key]
-        label = self.shifts[key]
+        label = {param_key: param_val[key] for param_key, param_val in self.params.items()}
         
         if Augmentation.PIXEL_SHIFT in self.augmentations:
             shift = [np.random.randint(0, 2*i+1) for i in self.padding]
+            label['x'] = label['x'] - shift[0] + self.padding[0]
+            label['y'] = label['y'] - shift[1] + self.padding[1]
             image = image[:,shift[0]:shift[0]+self.out_size[0],shift[1]:shift[1]+self.out_size[1]]
-            label = label + shift
             
         if Augmentation.NOISE_GAUSSIAN in self.augmentations:
             noise_sig = self.augmentations[Augmentation.NOISE_GAUSSIAN] * (image.max() - image.min())
             image = np.random.normal(image, noise_sig).astype(np.float32)
-            
+        
         return image, label

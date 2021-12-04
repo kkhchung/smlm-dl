@@ -291,8 +291,9 @@ class Gaussian2DRenderer(BaseRendererModel):
     
     
 class Template2DModel(BaseFitModel):
-    def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
-        BaseFitModel.__init__(self, renderer_class=Template2DRenderer, fit_params=fit_params, *args, **kwargs)
+    def __init__(self, fit_params=['x', 'y'], template_init='gauss', template_padding=None, *args, **kwargs):
+        BaseFitModel.__init__(self, renderer_class=Template2DRenderer, fit_params=fit_params,
+                              template_init=template_init, template_padding=template_padding, *args, **kwargs)
     
     def get_suppl(self, colored=False):
         template = self.renderer._calculate_template(True).detach().numpy()
@@ -305,23 +306,43 @@ class Template2DModel(BaseFitModel):
 
     
 class Template2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params, *args, **kwargs):
+    def __init__(self, img_size, fit_params, template_init=None, template_padding=None, *args, **kwargs):
         # The 2x sampling avoids the banding artifact that is probably caused by FFT subpixels shifts
         # This avoids any filtering in the spatial / fourier domain
 
         BaseRendererModel.__init__(self, img_size, fit_params)
         
-        xs = torch.linspace(-1, 1, self.img_size[0]*2)
-        ys = torch.linspace(-1, 1, self.img_size[1]*2)
-        xs, ys = torch.meshgrid(xs, ys, indexing='ij') # Guassian init
-        gaussian = torch.exp(-(xs**2*32+ ys**2*32))
-        self.template = ParameterModule(gaussian)
-        self.template_act = nn.ReLU()
+        scale_factor = 2
+        self.register_buffer('scale_factor', torch.tensor(scale_factor))
+        if template_padding is None:
+            # template_padding = [int((s+3)/4)*2 for s in img_size]
+            template_padding = [0, 0]
+        template_padding_scaled = [s*scale_factor for s in template_padding]
+        self.register_buffer('template_padding_scaled', torch.tensor(template_padding_scaled), False)
+        template_size_scaled = [img_size[d]*scale_factor + self.template_padding_scaled[d]*2 for d in range(2)]
+        noise = torch.zeros(template_size_scaled)
+        nn.init.xavier_normal_(noise, 1.0)     
+        if template_init is None or template_init == 'gauss':
+             # Guassian init
+            xs = torch.linspace(-1, 1, template_size_scaled[0])
+            ys = torch.linspace(-1, 1, template_size_scaled[1])
+            xs, ys = torch.meshgrid(xs, ys, indexing='ij')
+            template = torch.exp(-(xs**2*32+ ys**2*32))
+        else:
+            template = torch.tensor(template_init)
+            template = template - np.percentile(template, 10)
+            template = template / template.max()
+            template = nn.functional.interpolate(template[None,None,...], scale_factor=scale_factor)[0,0]
+            template = nn.functional.pad(template, (self.template_padding_scaled[0],)*2 + (self.template_padding_scaled[1],)*2, mode='constant', value=template.mean())
+        self.template = nn.Sequential(ParameterModule(template + noise),
+                                      nn.ReLU(),
+                                      # nn.Dropout2d(p=0.25),
+                                     )
         
-        self.template_pooling = nn.AvgPool2d((2,2), (2,2), padding=0)
+        self.template_pooling = nn.AvgPool2d((scale_factor,scale_factor), (scale_factor,scale_factor), padding=0)
         
-        kx = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[0]*2*2))
-        ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]*2*2))
+        kx = torch.fft.fftshift(torch.fft.fftfreq(template_size_scaled[0]*2))
+        ky = torch.fft.fftshift(torch.fft.fftfreq(template_size_scaled[1]*2))
         KX, KY = torch.meshgrid(kx, ky, indexing='ij')
         self.register_buffer('KX', KX, False)
         self.register_buffer('KY', KY, False)   
@@ -330,17 +351,17 @@ class Template2DRenderer(BaseRendererModel):
         # template is padded, shifted, croped and then down-sampled
         template = self._calculate_template()
         padding = (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2
-        template = nn.functional.pad(template.unsqueeze(0), padding, mode='replicate')[0]
+        template = nn.functional.pad(template.unsqueeze(0), padding, mode='constant')[0]
         
         template_fft = torch.fft.fftshift(torch.fft.fft2(template))
         
-        shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.KX*mapped_params['x'] + self.KY*mapped_params['y']))
+        shifted_fft = template_fft.unsqueeze(0)*torch.exp(-2j*np.pi*(self.KX*mapped_params['x'] + self.KY*mapped_params['y'])*self.scale_factor)
         
         shifted_template = torch.abs(torch.fft.ifft2(torch.fft.ifftshift(shifted_fft, dim=(-2,-1))))
         
         shifted_template = shifted_template[:,:,
-                                            padding[0]:-padding[1],
-                                            padding[2]:-padding[3],
+                                            padding[0]+self.template_padding_scaled[0]:-padding[1]-self.template_padding_scaled[0],
+                                            padding[2]+self.template_padding_scaled[1]:-padding[3]-self.template_padding_scaled[1],
                                            ]
         shifted_template = self.template_pooling(shifted_template)
         
@@ -350,7 +371,7 @@ class Template2DRenderer(BaseRendererModel):
         return shifted_template
     
     def _calculate_template(self, pool=False):
-        template = self.template_act(self.template(None))
+        template = self.template(None)
         if pool:
             template = self.template_pooling(template[None,None,...])[0,0]
         return template

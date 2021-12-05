@@ -19,9 +19,13 @@ class FittingTrainer(object):
     _default_optimizer = partial(torch.optim.Adam, lr=1e-4)
     current_state = {}
     
-    def __init__(self, model, train_data_loader, valid_data_loader=None, optimizer=None, loss_function=nn.MSELoss(), try_cuda=True):
+    def __init__(self, model, train_data_loader=None, valid_data_loader=None, optimizer=None, loss_function=nn.MSELoss(), try_cuda=True):
         
         self.model = model
+        if train_data_loader is None:
+            print("No training data supplied. Remember to set prior to training.")
+        if valid_data_loader is None:
+            print("No validation data supplied. Remember to set prior to training.")
         self.train_data_loader = train_data_loader
         self.valid_data_loader = valid_data_loader
         
@@ -101,9 +105,12 @@ class FittingTrainer(object):
                 for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:
                     for key, val in new_dict.items():
                         if key in old_dict:
-                            old_dict[key] = torch.cat([old_dict[key], torch.atleast_1d(torch.as_tensor(val))])
+                            if isinstance(val, torch.Tensor):
+                                old_dict[key] = torch.cat([old_dict[key], val])
+                            else:
+                                old_dict[key] = val # should be identical to the old value
                         else:
-                            old_dict[key] = torch.atleast_1d(torch.as_tensor(val))
+                            old_dict[key] = val
         
         loss = sum_loss / len(self.valid_data_loader)
         
@@ -175,7 +182,7 @@ class FittingTrainer(object):
         for param in params:
             if param in pred and param in y:
                 param_y = y[param].squeeze().detach().numpy()
-                param_pred = pred[param].squeeze().detach().numpy()
+                param_pred = torch.as_tensor(pred[param]).squeeze().detach().numpy()
                 error = np.std(param_pred - param_y)
                 tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
     
@@ -201,9 +208,9 @@ class FittingTrainer(object):
     def load_checkpoint(self, filepath):
         checkpoint = torch.load(filepath)
         
-        self.model.load_state_dict(checkpoint.pop("model_state_dict"))
-        self.optimizer.load_state_dict(checkpoint.pop("optimizer_state_dict"))
-        self.loss_function.load_state_dict(checkpoint.pop("loss_function_state_dict"))
+        self.model.load_state_dict(checkpoint.get("model_state_dict"))
+        self.optimizer.load_state_dict(checkpoint.get("optimizer_state_dict"))
+        self.loss_function.load_state_dict(checkpoint.get("loss_function_state_dict"))
         
         print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))
         print(summary(self.model))
@@ -214,7 +221,7 @@ class FittingTrainer(object):
         print(self.current_state)
         
     def save_model(self, filename=None):
-        path = self.current_state.pop("filename", None)
+        path = self.current_state.get("filename", None)
         if not filename is None:
             path = filename
         save_path = os.path.join("models", path + ".ptm")

@@ -142,6 +142,17 @@ class DirectConcatFeedbackModel(FeedbackModel):
         feedback = torch.tile(feedback, (x.shape[0], 1, 1, 1))
         x = torch.cat([self.norm(x), feedback], dim=1)
         return x
+    
+class CropAndConcatFeedbackModel(FeedbackModel):
+    def __init__(self, img_size=(32,32), feedback_size=(32,32)):
+        FeedbackModel.__init__(self)
+        self.norm = nn.GroupNorm(1, 1)
+        self.padding = [int((feedback_size[d]-img_size[d])/2) for d in range(len(feedback_size))]
+        
+    def forward(self, x, feedback):
+        feedback = torch.tile(feedback[:,:,self.padding[0]:-self.padding[0],self.padding[1]:-self.padding[1]], (x.shape[0], 1, 1, 1))
+        x = torch.cat([self.norm(x), feedback], dim=1)
+        return x
 
     
 class BaseFitModel(nn.Module):

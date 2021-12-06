@@ -13,38 +13,50 @@ import warnings
 
 import util, zernike
 
-class EncoderModel(nn.Module):
-    def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0, *args, **kwargs):
+class BaseEncoderModel(nn.Module):
+    def __init__(self, img_size=(32,32), last_out_channels=2, **kwargs):
         nn.Module.__init__(self)
         if img_size[0] % 2 != 0 or img_size[1] % 2 !=0:
             raise Exception("Image input size needs to be multiples of two.")
+        self.img_size = img_size
+        self.last_out_channels = last_out_channels
+        self.build_model(**kwargs)
+        
+    def build_model(self, **kwargs):
+        raise NotImplementedError()
+
+class EncoderModel(BaseEncoderModel):
+    def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0,):
         if 2**depth > img_size[0] or 2**depth > img_size[1]:
             raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
-            
-        self.depth = depth
-        self.img_size = img_size
+        
+        BaseEncoderModel.__init__(self, img_size, last_out_channels, depth=depth, first_layer_out_channels=first_layer_out_channels, skip_channels=skip_channels)
+        
+    def build_model(self, **kwargs):
+        depth = kwargs['depth']
+        first_layer_out_channels = kwargs['first_layer_out_channels']
+        skip_channels = kwargs['skip_channels']
         
         self.encoders = nn.ModuleDict()
-        self.skips = nn.ModuleDict()
-        
-        for i in range(self.depth):
+        self.skips = nn.ModuleDict()        
+        for i in range(depth):
             in_channels = 1 if i == 0 else 2**(i-1) * first_layer_out_channels
-            out_channels = 2**i * first_layer_out_channels
-            
+            out_channels = 2**i * first_layer_out_channels            
             if skip_channels > 0:
                 in_shape = (int(img_size[0] * 0.5**i), int(img_size[1] * 0.5**i))
                 self.skips["skip_conv_layer{}".format(i)] = self._skip_block(in_channels, skip_channels, in_shape)
             self.encoders["conv_layer{}".format(i)] = self._encode_block(in_channels, out_channels)
             
         self.neck = nn.ModuleDict()
-        self.neck["conv_layer_0"] = self._neck_block(int(2**(self.depth-1) * first_layer_out_channels),
-                                             (2**(self.depth) * first_layer_out_channels))
-        self.neck["conv_layer_1"] = self._encode_final_block(2**(self.depth) * first_layer_out_channels,
-                                                             2**(self.depth-1) * first_layer_out_channels,
-                                                            tuple(int(size*0.5**self.depth) for size in self.img_size))
+        self.neck["conv_layer_0"] = self._neck_block(int(2**(depth-1) * first_layer_out_channels),
+                                             (2**(depth) * first_layer_out_channels))
+        self.neck["conv_layer_1"] = self._encode_final_block(2**(depth) * first_layer_out_channels,
+                                                             2**(depth-1) * first_layer_out_channels,
+                                                            tuple(int(size*0.5**depth) for size in self.img_size))
         
         self.decoders = nn.ModuleDict()
-        self.decoders["dense_layer_0"] = nn.Conv2d(2**(self.depth-1) * first_layer_out_channels + skip_channels*self.depth, last_out_channels, kernel_size=1, padding=0)
+        self.decoders["dense_layer_0"] = nn.Conv2d(2**(depth-1) * first_layer_out_channels + skip_channels*depth,
+                                                   self.last_out_channels, kernel_size=1, padding=0)
         
     def forward(self, x):
         skips = dict()
@@ -105,20 +117,21 @@ class EncoderModel(nn.Module):
             nn.GroupNorm(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=image_shape, padding=0),
             nn.ReLU(),
-        )
-    
+        )    
 
     
-class BaseFitModel(EncoderModel):
+class BaseFitModel(nn.Module):
     params_ref = dict()
     
-    def __init__(self, renderer_class, img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={}, *args, **kwargs):
+    def __init__(self, encoder_class, renderer_class, img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={}, *args, **kwargs):
+        nn.Module.__init__(self)
+        self.img_size = img_size
         self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override)
-        EncoderModel.__init__(self, img_size=img_size, last_out_channels=self.n_fit_params, *args, **kwargs)
+        self.encoder = encoder_class(img_size=img_size, last_out_channels=self.n_fit_params)
         self.renderer = renderer_class(self.img_size, self.fit_params, *args, **kwargs)
         
     def forward(self, x):
-        x = EncoderModel.forward(self, x)
+        x = self.encoder.forward(x)
         batch_size = x.shape[0]
         x = self.map_params(x)
         self.mapped_params = x
@@ -255,7 +268,7 @@ class BaseRendererModel(nn.Module):
         
 class Gaussian2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y', 'sig'], *args, **kwargs):
-        BaseFitModel.__init__(self, renderer_class=Gaussian2DRenderer, fit_params=fit_params, *args, **kwargs)
+        BaseFitModel.__init__(self, encoder_class=EncoderModel, renderer_class=Gaussian2DRenderer, fit_params=fit_params, *args, **kwargs)
     
     def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref):
         params_ref = {
@@ -292,7 +305,7 @@ class Gaussian2DRenderer(BaseRendererModel):
     
 class Template2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], template_init='gauss', template_padding=None, *args, **kwargs):
-        BaseFitModel.__init__(self, renderer_class=Template2DRenderer, fit_params=fit_params,
+        BaseFitModel.__init__(self, encoder_class=EncoderModel, renderer_class=Template2DRenderer, fit_params=fit_params,
                               template_init=template_init, template_padding=template_padding, *args, **kwargs)
     
     def get_suppl(self, colored=False):
@@ -379,7 +392,7 @@ class Template2DRenderer(BaseRendererModel):
     
 class FourierOptics2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
-        BaseFitModel.__init__(self, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, *args, **kwargs)
+        BaseFitModel.__init__(self, encoder_class=EncoderModel, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, *args, **kwargs)
     
     def get_suppl(self, colored=False):
         pupil_magnitude, pupil_phase, pupil_prop = self.renderer._calculate_pupil()

@@ -46,7 +46,7 @@ class EncoderModel(BaseEncoderModel):
             in_channels = self.in_channels if i == 0 else 2**(i-1) * first_layer_out_channels
             out_channels = 2**i * first_layer_out_channels            
             if skip_channels > 0:
-                in_shape = (int(img_size[0] * 0.5**i), int(img_size[1] * 0.5**i))
+                in_shape = (int(self.img_size[0] * 0.5**i), int(self.img_size[1] * 0.5**i))
                 self.skips["skip_conv_layer{}".format(i)] = self._skip_block(in_channels, skip_channels, in_shape)
             self.encoders["conv_layer{}".format(i)] = self._encode_block(in_channels, out_channels)
             
@@ -134,7 +134,7 @@ class FeedbackModel(nn.Module):
 class DirectConcatFeedbackModel(FeedbackModel):
     def __init__(self, img_size=(32,32), feedback_size=(32,32)):
         if not all([img_size[d]==feedback_size[d] for d in range(len(img_size))]):
-            raise Exception("Input and feedback need have have identical H and W.")
+            raise Exception("Input and feedback need to have identical H and W.")
         FeedbackModel.__init__(self)
         self.norm = nn.GroupNorm(1, 1)
         
@@ -160,7 +160,7 @@ class BaseFitModel(nn.Module):
             feedback = self.renderer.get_feedback()
             self.feedbacker = feedback_class(img_size, feedback.shape[-2:])
             in_channels += feedback.shape[1]
-        self.encoder = encoder_class(img_size=img_size, in_channels=in_channels, last_out_channels=self.n_fit_params)
+        self.encoder = encoder_class(img_size=img_size, in_channels=in_channels, last_out_channels=self.n_fit_params, skip_channels=kwargs.pop('skip_channels', 0))
         
     def forward(self, x):
         if not self.feedbacker is None:
@@ -206,10 +206,11 @@ class BaseFitModel(nn.Module):
                 mapped_params[param] = self.params_ref[param].default
             else:
                 repeats = len(self.fit_params[param])
-                mapped_params[param] = x[:, i:i+repeats, ...]
+                temp_params = x[:, i:i+repeats, ...]
+                mapped_params[param] = torch.empty_like(temp_params)
                 
-                for j in range(mapped_params[param].shape[1]):
-                    mapped_params[param][:, j] = self.fit_params[param][j].activation(mapped_params[param][:, j])
+                for j in range(temp_params.shape[1]):
+                    mapped_params[param][:, j] = self.fit_params[param][j].activation(temp_params[:, j])
                     mapped_params[param][:, j] = torch.add(mapped_params[param][:, j], self.fit_params[param][j].offset)
                     mapped_params[param][:, j] = torch.mul(mapped_params[param][:, j], self.fit_params[param][j].scaling)
                 
@@ -227,7 +228,7 @@ class BaseFitModel(nn.Module):
                 mapped_params[param] = torch.rand((num, repeats, 1, 1))
                 
                 for j in range(mapped_params[param].shape[1]):
-                    if isinstance(self.fit_params[param][j].activation, nn.Tanh):
+                    if isinstance(self.fit_params[param][j].activation, (nn.Tanh, nn.Hardtanh)):
                         mapped_params[param][:, j] = (mapped_params[param][:, j] - 0.5) * 2
                     elif isinstance(self.fit_params[param][j].activation, nn.ReLU):
                         mapped_params[param][:, j] = mapped_params[param][:, j]
@@ -371,19 +372,21 @@ class Template2DRenderer(BaseRendererModel):
         self.register_buffer('template_padding_scaled', torch.tensor(template_padding_scaled), False)
         template_size_scaled = [img_size[d]*scale_factor + self.template_padding_scaled[d]*2 for d in range(2)]
         noise = torch.zeros(template_size_scaled)
-        nn.init.xavier_uniform_(noise, 0.1)     
         if template_init is None or template_init == 'gauss':
+            nn.init.xavier_uniform_(noise, 0.1)
              # Guassian init
             xs = torch.linspace(-1, 1, template_size_scaled[0])
             ys = torch.linspace(-1, 1, template_size_scaled[1])
             xs, ys = torch.meshgrid(xs, ys, indexing='ij')
             template = torch.exp(-(xs**2*32+ ys**2*32))
         else:
+            nn.init.xavier_uniform_(noise, 1.0)
             template = torch.tensor(template_init)
             template = template - np.percentile(template, 10)
             template = template / template.max()
-            template = nn.functional.interpolate(template[None,None,...], scale_factor=scale_factor)[0,0]
-            template = nn.functional.pad(template, (self.template_padding_scaled[0],)*2 + (self.template_padding_scaled[1],)*2, mode='constant', value=template.mean())
+            template = nn.functional.interpolate(template[None,None,...], scale_factor=scale_factor)
+            template = nn.functional.pad(template, (self.template_padding_scaled[0],)*2 + (self.template_padding_scaled[1],)*2, mode='reflect', )# value=template.mean())
+            template = template[0,0]
         self.template = nn.Sequential(ParameterModule(template + noise),
                                       nn.ReLU(),
                                       # nn.Dropout2d(p=0.25),

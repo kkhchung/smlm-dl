@@ -14,11 +14,12 @@ import warnings
 import util, zernike
 
 class BaseEncoderModel(nn.Module):
-    def __init__(self, img_size=(32,32), last_out_channels=2, **kwargs):
+    def __init__(self, img_size=(32,32), in_channels=1, last_out_channels=2, **kwargs):
         nn.Module.__init__(self)
         if img_size[0] % 2 != 0 or img_size[1] % 2 !=0:
             raise Exception("Image input size needs to be multiples of two.")
         self.img_size = img_size
+        self.in_channels = in_channels
         self.last_out_channels = last_out_channels
         self.build_model(**kwargs)
         
@@ -26,11 +27,13 @@ class BaseEncoderModel(nn.Module):
         raise NotImplementedError()
 
 class EncoderModel(BaseEncoderModel):
-    def __init__(self, img_size=(32,32), depth=3, first_layer_out_channels=16, last_out_channels=2, skip_channels=0,):
+    def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=16, last_out_channels=2, skip_channels=0,):
         if 2**depth > img_size[0] or 2**depth > img_size[1]:
             raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
         
-        BaseEncoderModel.__init__(self, img_size, last_out_channels, depth=depth, first_layer_out_channels=first_layer_out_channels, skip_channels=skip_channels)
+        BaseEncoderModel.__init__(self, img_size=img_size, in_channels=in_channels,
+                                  last_out_channels=last_out_channels, depth=depth,
+                                  first_layer_out_channels=first_layer_out_channels, skip_channels=skip_channels)
         
     def build_model(self, **kwargs):
         depth = kwargs['depth']
@@ -38,9 +41,9 @@ class EncoderModel(BaseEncoderModel):
         skip_channels = kwargs['skip_channels']
         
         self.encoders = nn.ModuleDict()
-        self.skips = nn.ModuleDict()        
+        self.skips = nn.ModuleDict()
         for i in range(depth):
-            in_channels = 1 if i == 0 else 2**(i-1) * first_layer_out_channels
+            in_channels = self.in_channels if i == 0 else 2**(i-1) * first_layer_out_channels
             out_channels = 2**i * first_layer_out_channels            
             if skip_channels > 0:
                 in_shape = (int(img_size[0] * 0.5**i), int(img_size[1] * 0.5**i))
@@ -117,21 +120,52 @@ class EncoderModel(BaseEncoderModel):
             nn.GroupNorm(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=image_shape, padding=0),
             nn.ReLU(),
-        )    
+        )
+    
+    
+class FeedbackModel(nn.Module):
+    def __init__(self, img_size=(32,32), feedback_size=(32,32)):
+        nn.Module.__init__(self)
+        
+    def forward(self, x, feedback):
+        raise NotImplementedError()
+        
+    
+class DirectConcatFeedbackModel(FeedbackModel):
+    def __init__(self, img_size=(32,32), feedback_size=(32,32)):
+        if not all([img_size[d]==feedback_size[d] for d in range(len(img_size))]):
+            raise Exception("Input and feedback need have have identical H and W.")
+        FeedbackModel.__init__(self)
+        self.norm = nn.GroupNorm(1, 1)
+        
+    def forward(self, x, feedback):
+        feedback = torch.tile(feedback, (x.shape[0], 1, 1, 1))
+        x = torch.cat([self.norm(x), feedback], dim=1)
+        return x
 
     
 class BaseFitModel(nn.Module):
     params_ref = dict()
     
-    def __init__(self, encoder_class, renderer_class, img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={}, *args, **kwargs):
+    def __init__(self, encoder_class, renderer_class, feedback_class=None,
+                 img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={}, *args, **kwargs):
         nn.Module.__init__(self)
         self.img_size = img_size
         self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override)
-        self.encoder = encoder_class(img_size=img_size, last_out_channels=self.n_fit_params)
         self.renderer = renderer_class(self.img_size, self.fit_params, *args, **kwargs)
+        in_channels = 1
+        if feedback_class is None:
+            self.feedbacker = None
+        else:
+            feedback = self.renderer.get_feedback()
+            self.feedbacker = feedback_class(img_size, feedback.shape[-2:])
+            in_channels += feedback.shape[1]
+        self.encoder = encoder_class(img_size=img_size, in_channels=in_channels, last_out_channels=self.n_fit_params)
         
     def forward(self, x):
-        x = self.encoder.forward(x)
+        if not self.feedbacker is None:
+            x = self.feedbacker(x, self.renderer.get_feedback())
+        x = self.encoder(x)
         batch_size = x.shape[0]
         x = self.map_params(x)
         self.mapped_params = x
@@ -264,6 +298,9 @@ class BaseRendererModel(nn.Module):
     def _render_images(self, params, batch_size):
         # explicit call to render images without going through the rest of the model
         raise NotImplementedError()
+    
+    def get_feedback(self):
+        raise NotImplementedError()
 
         
 class Gaussian2DModel(BaseFitModel):
@@ -334,7 +371,7 @@ class Template2DRenderer(BaseRendererModel):
         self.register_buffer('template_padding_scaled', torch.tensor(template_padding_scaled), False)
         template_size_scaled = [img_size[d]*scale_factor + self.template_padding_scaled[d]*2 for d in range(2)]
         noise = torch.zeros(template_size_scaled)
-        nn.init.xavier_normal_(noise, 1.0)     
+        nn.init.xavier_uniform_(noise, 0.1)     
         if template_init is None or template_init == 'gauss':
              # Guassian init
             xs = torch.linspace(-1, 1, template_size_scaled[0])
@@ -388,6 +425,9 @@ class Template2DRenderer(BaseRendererModel):
         if pool:
             template = self.template_pooling(template[None,None,...])[0,0]
         return template
+    
+    def get_feedback(self):
+        return self._calculate_template(True).unsqueeze(0).unsqueeze(0)
 
     
 class FourierOptics2DModel(BaseFitModel):
@@ -501,6 +541,9 @@ class FourierOptics2DRenderer(BaseRendererModel):
         pupil_phase = self.pupil_phase(None)
         pupil_prop = self.pupil_prop
         return pupil_magnitude, pupil_phase, pupil_prop
+    
+    def get_feedback(self):
+        return torch.stack(self._calculate_pupil()).unsqueeze(0)
 
     
 class ParameterModule(nn.Module):

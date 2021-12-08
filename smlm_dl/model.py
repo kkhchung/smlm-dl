@@ -413,13 +413,15 @@ class Template2DRenderer(BaseRendererModel):
         noise = torch.zeros(template_size_scaled)
         if template_init is None or template_init == 'gauss':
             nn.init.xavier_uniform_(noise, 0.1)
+            noise += 0.1 + 1e-3
              # Guassian init
             xs = torch.linspace(-1, 1, template_size_scaled[0])
             ys = torch.linspace(-1, 1, template_size_scaled[1])
             xs, ys = torch.meshgrid(xs, ys, indexing='ij')
             template = torch.exp(-(xs**2*32+ ys**2*32))
         else:
-            nn.init.xavier_uniform_(noise, 1.0)
+            nn.init.xavier_uniform_(noise, 0.5)
+            noise += 0.5 + 1e-3
             template = torch.tensor(template_init)
             template = template - np.percentile(template, 10)
             template = template / template.max()
@@ -443,7 +445,7 @@ class Template2DRenderer(BaseRendererModel):
         # template is padded, shifted, croped and then down-sampled
         template = self._calculate_template()
         padding = (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2
-        template = nn.functional.pad(template.unsqueeze(0), padding, mode='constant')[0]
+        template = nn.functional.pad(template.unsqueeze(0).unsqueeze(0), padding, mode='circular')[0,0]
         
         template_fft = torch.fft.fftshift(torch.fft.fft2(template))
         

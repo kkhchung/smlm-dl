@@ -5,6 +5,8 @@ from torch.utils.tensorboard import SummaryWriter
 
 from torchinfo import summary
 
+import socket, datetime
+import pathlib
 from functools import partial
 import os
 import time
@@ -14,7 +16,6 @@ import matplotlib
 from matplotlib import pyplot as plt
 
 import util, config
-import socket, datetime
     
 class FittingTrainer(object):
     _default_optimizer = partial(torch.optim.Adam, lr=1e-4)
@@ -85,9 +86,6 @@ class FittingTrainer(object):
         
         self.current_state['epoch'] = epoch_i
         self.current_state['loss'] = loss
-        if not tb_logger is None:
-            self.current_state['filename'] = os.path.split(tb_logger.get_logdir())[-1]
-            self.current_state['log_path'] = tb_logger.log_dir
                 
     def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=16, show_images=True):
         self.model.to(self.device)
@@ -144,19 +142,17 @@ class FittingTrainer(object):
             plt.colorbar(im, ax=axes[1])
             axes[1].set_title('pred')
         
-    def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=True, checkpoint_interval=1000):
+    def train_and_validate(self, n_epoch=100, validate_interval=10, checkpoint_interval=1000, tb_logger=True, label=None):
         """
         
         """
-        if tb_logger is True or isinstance(tb_logger, str):            
-            current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
-            filename = "{}_{}".format(current_time, config.config["ID"]["computer"])
-            if isinstance(tb_logger, str):
-                filename += "_{}".format(tb_logger)
-            tb_logger = SummaryWriter(log_dir=os.path.join(config.config["LOG_PATH"]["run"], filename))
+        self.set_logpath(label)
+        
+        if tb_logger is True:
+            tb_logger = SummaryWriter(log_dir=self.current_state["log_path"])
         
         if True: # always pickle the model on running
-            self.save_model(os.path.split(tb_logger.get_logdir())[-1])
+            self.save_model()
         
         for epoch_i in range(n_epoch):
             self.train_single_epoch(epoch_i, tb_logger=tb_logger)
@@ -191,16 +187,17 @@ class FittingTrainer(object):
                 error = np.std(param_pred - param_y)
                 tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
     
-    def save_checkpoint(self, filename=None):
+    def save_checkpoint(self, filepath=None):
         state_dict = {
             "model_state_dict": self.model.state_dict(),
             "optimizer_state_dict": self.optimizer.state_dict(),
             "loss_function_state_dict": self.loss_function.state_dict(),
         }
         state_dict.update(self.current_state)
-        if not filename is None:
-            state_dict["filename"] = filename
-        save_path = os.path.join(config.config["LOG_PATH"]["checkpoint"], state_dict["filename"] + ".ptc")
+        current_path = state_dict["log_path"]
+        if not filepath is None:
+            current_path = filepath
+        save_path = os.path.join(current_path, "checkpoint.ptc")
         torch.save(state_dict, save_path)
         
         print("Saved to : {}".format(save_path))
@@ -225,13 +222,22 @@ class FittingTrainer(object):
             self.current_state['key'] = val
         print(self.current_state)
         
-    def save_model(self, filename=None):
-        path = self.current_state.get("filename", None)
-        if not filename is None:
-            path = filename
-        save_path = os.path.join(config.config["LOG_PATH"]["model"], path + ".ptm")
+    def save_model(self, filepath=None):
+        current_path = self.current_state["log_path"]
+        if not filepath is None:
+            current_path = filepath
+        save_path = os.path.join(current_path, "model.ptm")
         torch.save(self.model, save_path)
         print("Saved to : {}".format(save_path))
+        
+    def set_logpath(self, label=None):
+        current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+        filename = "{}_{}".format(current_time, config.config["ID"]["computer"])
+        if not label is None:
+            filename += "_{}".format(label)
+        log_path = os.path.join(config.config["LOG_PATH"]["run"], filename)
+        self.current_state["log_path"] = log_path
+        pathlib.Path(log_path).mkdir(parents=True, exist_ok=True)
         
     @staticmethod
     def from_model_file(filepath, *args, **kwargs):

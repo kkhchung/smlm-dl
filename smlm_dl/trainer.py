@@ -13,7 +13,8 @@ import numpy as np
 import matplotlib
 from matplotlib import pyplot as plt
 
-import util
+import util, config
+import socket, datetime
     
 class FittingTrainer(object):
     _default_optimizer = partial(torch.optim.Adam, lr=1e-4)
@@ -143,12 +144,16 @@ class FittingTrainer(object):
             plt.colorbar(im, ax=axes[1])
             axes[1].set_title('pred')
         
-    def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=None, checkpoint_interval=1000):
+    def train_and_validate(self, n_epoch=100, validate_interval=10, tb_logger=True, checkpoint_interval=1000):
         """
         
-        """        
-        if tb_logger is None:
-            tb_logger = SummaryWriter()
+        """
+        if tb_logger is True or isinstance(tb_logger, str):            
+            current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
+            filename = "{}_{}".format(current_time, config.config["ID"]["computer"])
+            if isinstance(tb_logger, str):
+                filename += "_{}".format(tb_logger)
+            tb_logger = SummaryWriter(log_dir=os.path.join(config.config["LOG_PATH"]["run"], filename))
         
         if True: # always pickle the model on running
             self.save_model(os.path.split(tb_logger.get_logdir())[-1])
@@ -195,7 +200,7 @@ class FittingTrainer(object):
         state_dict.update(self.current_state)
         if not filename is None:
             state_dict["filename"] = filename
-        save_path = os.path.join("checkpoints", state_dict["filename"] + ".ptc")
+        save_path = os.path.join(config.config["LOG_PATH"]["checkpoint"], state_dict["filename"] + ".ptc")
         torch.save(state_dict, save_path)
         
         print("Saved to : {}".format(save_path))
@@ -224,7 +229,7 @@ class FittingTrainer(object):
         path = self.current_state.get("filename", None)
         if not filename is None:
             path = filename
-        save_path = os.path.join("models", path + ".ptm")
+        save_path = os.path.join(config.config["LOG_PATH"]["model"], path + ".ptm")
         torch.save(self.model, save_path)
         print("Saved to : {}".format(save_path))
         

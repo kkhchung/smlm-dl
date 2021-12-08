@@ -142,7 +142,8 @@ class FittingTrainer(object):
             plt.colorbar(im, ax=axes[1])
             axes[1].set_title('pred')
         
-    def train_and_validate(self, n_epoch=100, validate_interval=10, checkpoint_interval=1000, tb_logger=True, label=None):
+    def train_and_validate(self, n_epoch=100, training_interval=10, validate_interval=100,
+                           checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=16):
         """
         
         """
@@ -155,10 +156,13 @@ class FittingTrainer(object):
             self.save_model()
         
         for epoch_i in range(n_epoch):
-            self.train_single_epoch(epoch_i, tb_logger=tb_logger)
+            self.train_single_epoch(epoch_i,
+                                    tb_logger=tb_logger if (epoch_i % training_interval == 0) else None,
+                                    tb_log_limit_images=tb_log_limit_images)
             
             if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
-                self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger, show_images=(epoch_i+1)==n_epoch)
+                self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger,
+                              show_images=(epoch_i+1)==n_epoch, tb_log_limit_images=tb_log_limit_images)
                 
             if ((epoch_i+1) % checkpoint_interval == 0) or ((epoch_i+1)==n_epoch):
                 self.save_checkpoint()

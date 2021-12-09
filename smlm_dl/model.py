@@ -179,6 +179,29 @@ class DenseFeedbackModel(FeedbackModel):
         )
 
     
+class DiffFeedbackModel(FeedbackModel):
+    def __init__(self, img_size=(32,32), feedback_size=(32,32)):
+        FeedbackModel.__init__(self)        
+        
+    def forward(self, x, feedback):
+        feedback = feedback.detach()
+        # feedback = self.normalize(feedback.detach())
+        # feedback = torch.tile(feedback, (x.shape[0], 1, 1, 1))
+        # feedback = self.scale_to(feedback, x)
+        x = torch.cat([x, feedback-x], dim=1)
+        return x
+    
+    def normalize(self, arr):
+        arr -= arr.min()
+        arr /= arr.max()
+        return arr
+            
+    def scale_to(self, feedback, x):
+        feedback += torch.amin(x, dim=(-2,-1), keepdim=True)
+        feedback *= torch.amax(x, dim=(-2,-1), keepdim=True) - torch.amin(x, dim=(-2,-1), keepdim=True)
+        return feedback
+    
+    
 class BaseFitModel(nn.Module):
     params_ref = dict()
     
@@ -442,7 +465,7 @@ class Template2DRenderer(BaseRendererModel):
         # template is padded, shifted, croped and then down-sampled
         template = self._calculate_template()
         padding = (int(0.5*template.shape[0]),)*2 + (int(0.5*template.shape[1]),)*2
-        template = nn.functional.pad(template.unsqueeze(0).unsqueeze(0), padding, mode='circular')[0,0]
+        template = nn.functional.pad(template.unsqueeze(0).unsqueeze(0), padding, mode='constant')[0,0]
         
         template_fft = torch.fft.fftshift(torch.fft.fft2(template))
         

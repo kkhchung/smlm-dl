@@ -32,14 +32,10 @@ class EncoderModel(BaseEncoderModel):
             raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
         
         BaseEncoderModel.__init__(self, img_size=img_size, in_channels=in_channels,
-                                  last_out_channels=last_out_channels, depth=depth,
-                                  first_layer_out_channels=first_layer_out_channels, skip_channels=skip_channels)
+                                  last_out_channels=last_out_channels,
+                                  **{"depth":depth, "first_layer_out_channels":first_layer_out_channels, "skip_channels":skip_channels})
         
-    def build_model(self, **kwargs):
-        depth = kwargs['depth']
-        first_layer_out_channels = kwargs['first_layer_out_channels']
-        skip_channels = kwargs['skip_channels']
-        
+    def build_model(self, depth, first_layer_out_channels, skip_channels):        
         self.encoders = nn.ModuleDict()
         self.skips = nn.ModuleDict()
         for i in range(depth):
@@ -186,20 +182,21 @@ class DenseFeedbackModel(FeedbackModel):
 class BaseFitModel(nn.Module):
     params_ref = dict()
     
-    def __init__(self, encoder_class, renderer_class, feedback_class=None,
-                 img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={}, *args, **kwargs):
+    def __init__(self, renderer_class, encoder_class, feedback_class=None,
+                 img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={},
+                 encoder_params={}, renderer_params={}, feedback_params={},):
         nn.Module.__init__(self)
         self.img_size = img_size
         self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override)
-        self.renderer = renderer_class(self.img_size, self.fit_params, *args, **kwargs)
+        self.renderer = renderer_class(self.img_size, self.fit_params, **renderer_params)
         in_channels = 1
         if feedback_class is None:
             self.feedbacker = None
         else:
             feedback = self.renderer.get_feedback()
-            self.feedbacker = feedback_class(img_size, feedback.shape[-2:])
+            self.feedbacker = feedback_class(img_size, feedback.shape[-2:], **feedback_params)
             in_channels += feedback.shape[1]
-        self.encoder = encoder_class(img_size=img_size, in_channels=in_channels, last_out_channels=self.n_fit_params, skip_channels=kwargs.pop('skip_channels', 0))
+        self.encoder = encoder_class(img_size=img_size, in_channels=in_channels, last_out_channels=self.n_fit_params, **encoder_params)
         
     def forward(self, x):
         if not self.feedbacker is None:
@@ -344,8 +341,8 @@ class BaseRendererModel(nn.Module):
 
         
 class Gaussian2DModel(BaseFitModel):
-    def __init__(self, fit_params=['x', 'y', 'sig'], *args, **kwargs):
-        BaseFitModel.__init__(self, encoder_class=EncoderModel, renderer_class=Gaussian2DRenderer, fit_params=fit_params, *args, **kwargs)
+    def __init__(self, fit_params=['x', 'y', 'sig'], encoder_class=EncoderModel, **kwargs):
+        BaseFitModel.__init__(self, encoder_class=encoder_class, renderer_class=Gaussian2DRenderer, fit_params=fit_params, **kwargs)
     
     def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref):
         params_ref = {
@@ -358,7 +355,7 @@ class Gaussian2DModel(BaseFitModel):
     
 class Gaussian2DRenderer(BaseRendererModel):
     
-    def __init__(self, img_size, fit_params, *args, **kwargs):
+    def __init__(self, img_size, fit_params):
         
         BaseRendererModel.__init__(self, img_size, fit_params)
         
@@ -381,9 +378,9 @@ class Gaussian2DRenderer(BaseRendererModel):
     
     
 class Template2DModel(BaseFitModel):
-    def __init__(self, fit_params=['x', 'y'], template_init='gauss', template_padding=None, *args, **kwargs):
-        BaseFitModel.__init__(self, encoder_class=EncoderModel, renderer_class=Template2DRenderer, fit_params=fit_params,
-                              template_init=template_init, template_padding=template_padding, *args, **kwargs)
+    def __init__(self, fit_params=['x', 'y'], encoder_class=EncoderModel, **kwargs):
+        BaseFitModel.__init__(self, encoder_class=encoder_class, renderer_class=Template2DRenderer, fit_params=fit_params,
+                              **kwargs)
     
     def get_suppl(self, colored=False):
         template = self.renderer._calculate_template(True).detach().numpy()
@@ -396,7 +393,7 @@ class Template2DModel(BaseFitModel):
 
     
 class Template2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params, template_init=None, template_padding=None, *args, **kwargs):
+    def __init__(self, img_size, fit_params, template_init=None, template_padding=None):
         # The 2x sampling avoids the banding artifact that is probably caused by FFT subpixels shifts
         # This avoids any filtering in the spatial / fourier domain
 
@@ -475,8 +472,8 @@ class Template2DRenderer(BaseRendererModel):
 
     
 class FourierOptics2DModel(BaseFitModel):
-    def __init__(self, fit_params=['x', 'y'], *args, **kwargs):
-        BaseFitModel.__init__(self, encoder_class=EncoderModel, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, *args, **kwargs)
+    def __init__(self, fit_params=['x', 'y'], encoder_class=EncoderModel, **kwargs):
+        BaseFitModel.__init__(self, encoder_class=encoder_class, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, **kwargs)
     
     def get_suppl(self, colored=False):
         pupil_magnitude, pupil_phase, pupil_prop = self.renderer._calculate_pupil()
@@ -497,7 +494,7 @@ class FourierOptics2DModel(BaseFitModel):
                }
 
 class FourierOptics2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False, 'phase_init_zern':{}}, *args, **kwargs):
+    def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False, 'phase_init_zern':{}},):
 
         BaseRendererModel.__init__(self, img_size, fit_params)
         

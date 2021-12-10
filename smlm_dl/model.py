@@ -4,8 +4,6 @@ import numpy as np
 import torch
 from torch import nn
 
-# from torchinfo import summary
-
 import matplotlib
 from matplotlib import pyplot as plt
 
@@ -14,24 +12,56 @@ import warnings
 import util, zernike
 
 class BaseEncoderModel(nn.Module):
-    def __init__(self, img_size=(32,32), in_channels=1, last_out_channels=2, **kwargs):
+    def __init__(self, last_out_channels=2, **kwargs):
         nn.Module.__init__(self)
-        if img_size[0] % 2 != 0 or img_size[1] % 2 !=0:
-            raise Exception("Image input size needs to be multiples of two.")
-        self.img_size = img_size
-        self.in_channels = in_channels
         self.last_out_channels = last_out_channels
         self.build_model(**kwargs)
         
     def build_model(self, **kwargs):
         raise NotImplementedError()
 
-class EncoderModel(BaseEncoderModel):
+
+class IdEncoderModel(BaseEncoderModel):
+    def __init__(self, num_img, last_out_channels=2, init_weights=None):
+        BaseEncoderModel.__init__(self, last_out_channels=last_out_channels, **{"num_img":num_img, "init_weights":init_weights})
+        self.image_input = False
+    
+    def build_model(self, num_img, init_weights=None):
+        self.one_hot = functools.partial(torch.nn.functional.one_hot, num_classes=num_img)
+        self.encoders = nn.ModuleDict()
+        self.encoders["scale"] = nn.Linear(num_img, self.last_out_channels, bias=False)
+        if not init_weights is None:
+            with torch.no_grad():
+                print(init_weights.shape)
+                print(self.encoders["scale"].weight.shape)
+                self.encoders["scale"].weight.copy_(torch.as_tensor(init_weights))
+    
+    def forward(self, x):
+        x = x.to(torch.long) 
+        x = self.one_hot(x)
+        x = x.to(torch.float)
+        for key, val in self.encoders.items():
+            x = val(x)
+        x = x.unsqueeze(-1).unsqueeze(-1)
+        return x
+    
+    
+class ImageEncoderModel(BaseEncoderModel):
+    def __init__(self, img_size=(32,32), in_channels=1, last_out_channels=2, **kwargs):
+        if not img_size is None and (img_size[0] % 2 != 0 or img_size[1] % 2 !=0):
+            raise Exception("Image input size needs to be multiples of two.")
+        self.image_input = True
+        self.img_size = img_size
+        self.in_channels = in_channels
+        BaseEncoderModel.__init__(self, last_out_channels=last_out_channels, **kwargs)
+        
+
+class ConvImageEncoderModel(ImageEncoderModel):
     def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=16, last_out_channels=2, skip_channels=0,):
         if 2**depth > img_size[0] or 2**depth > img_size[1]:
             raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
         
-        BaseEncoderModel.__init__(self, img_size=img_size, in_channels=in_channels,
+        ImageEncoderModel.__init__(self, img_size=img_size, in_channels=in_channels,
                                   last_out_channels=last_out_channels,
                                   **{"depth":depth, "first_layer_out_channels":first_layer_out_channels, "skip_channels":skip_channels})
         
@@ -203,14 +233,14 @@ class DiffFeedbackModel(FeedbackModel):
     
     
 class BaseFitModel(nn.Module):
-    params_ref = dict()
     
     def __init__(self, renderer_class, encoder_class, feedback_class=None,
-                 img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1, params_ref_override={},
+                 img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1,
+                 params_ref_override={}, params_ref_no_scale=False,
                  encoder_params={}, renderer_params={}, feedback_params={},):
         nn.Module.__init__(self)
         self.img_size = img_size
-        self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override)
+        self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override, params_ref_no_scale)
         self.renderer = renderer_class(self.img_size, self.fit_params, **renderer_params)
         in_channels = 1
         if feedback_class is None:
@@ -219,7 +249,10 @@ class BaseFitModel(nn.Module):
             feedback = self.renderer.get_feedback()
             self.feedbacker = feedback_class(img_size, feedback.shape[-2:], **feedback_params)
             in_channels += feedback.shape[1]
-        self.encoder = encoder_class(img_size=img_size, in_channels=in_channels, last_out_channels=self.n_fit_params, **encoder_params)
+        if issubclass(encoder_class, ImageEncoderModel):
+            encoder_params.update({"img_size":img_size, "in_channels":in_channels})
+        self.encoder = encoder_class(last_out_channels=self.n_fit_params, **encoder_params)
+        self.image_input = self.encoder.image_input
         
     def forward(self, x):
         if not self.feedbacker is None:
@@ -231,7 +264,8 @@ class BaseFitModel(nn.Module):
         x = self.renderer(x, batch_size)
         return x
     
-    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref={},):
+    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
+        self.params_ref = dict()
         self.params_ref.update({
             'x': FitParameter(nn.Tanh(), 0, 0.75 * img_size[0], 0, True),
             'y': FitParameter(nn.Tanh(), 0, 0.75 * img_size[1], 0, True),
@@ -240,10 +274,16 @@ class BaseFitModel(nn.Module):
             'bg': FitParameter(nn.Tanh(), 0, 500, 0, False),
             'p': FitParameter(nn.Sigmoid(), 0, 1, 1, True)
         })        
-        
         self.params_ref.update(new_params_ref)
         
+        if params_ref_no_scale is True:
+            for key in self.params_ref:
+                self.params_ref[key] = FitParameter(nn.Identity(), 0, 1,
+                                                    (self.params_ref[key].default + self.params_ref[key].offset) * self.params_ref[key].scaling,
+                                                    self.params_ref[key].per_psf)
+
         detailed_fit_params = dict()
+        params_ref_sorted = dict()
         n_fit_params = 0
         for param in fit_params:
             if not param in self.params_ref:
@@ -253,6 +293,10 @@ class BaseFitModel(nn.Module):
             for i in range(repeats):
                 detailed_fit_params[param].append(self.params_ref[param].copy())
                 n_fit_params += 1
+            params_ref_sorted[param] = self.params_ref.pop(param)
+        params_ref_sorted.update(self.params_ref)
+        self.params_ref.clear() 
+        self.params_ref.update(params_ref_sorted)
         self.fit_params = detailed_fit_params
         # print(self.fit_params)
         self.n_fit_params = n_fit_params
@@ -289,9 +333,7 @@ class BaseFitModel(nn.Module):
                 for j in range(mapped_params[param].shape[1]):
                     if isinstance(self.fit_params[param][j].activation, (nn.Tanh, nn.Hardtanh)):
                         mapped_params[param][:, j] = (mapped_params[param][:, j] - 0.5) * 2
-                    elif isinstance(self.fit_params[param][j].activation, nn.ReLU):
-                        mapped_params[param][:, j] = mapped_params[param][:, j]
-                    elif isinstance(self.fit_params[param][j].activation, nn.Sigmoid):
+                    elif isinstance(self.fit_params[param][j].activation, (nn.Identity, nn.ReLU, nn.Sigmoid)):
                         mapped_params[param][:, j] = mapped_params[param][:, j]
                     else:
                         raise Exception("Unrecognized activation function. [{}]".format(type(self.fit_params[param][j].activation)))
@@ -364,16 +406,16 @@ class BaseRendererModel(nn.Module):
 
         
 class Gaussian2DModel(BaseFitModel):
-    def __init__(self, fit_params=['x', 'y', 'sig'], encoder_class=EncoderModel, **kwargs):
+    def __init__(self, fit_params=['x', 'y', 'sig'], encoder_class=ConvImageEncoderModel, **kwargs):
         BaseFitModel.__init__(self, encoder_class=encoder_class, renderer_class=Gaussian2DRenderer, fit_params=fit_params, **kwargs)
     
-    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref):
+    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
         params_ref = {
             'sig': FitParameter(nn.ReLU(), 2, 1, 5, True),
         }
         params_ref.update(new_params_ref)
         
-        BaseFitModel.setup_fit_params(self, img_size, fit_params, max_psf_count, params_ref)
+        BaseFitModel.setup_fit_params(self, img_size, fit_params, max_psf_count, params_ref, params_ref_no_scale)
 
     
 class Gaussian2DRenderer(BaseRendererModel):
@@ -401,7 +443,7 @@ class Gaussian2DRenderer(BaseRendererModel):
     
     
 class Template2DModel(BaseFitModel):
-    def __init__(self, fit_params=['x', 'y'], encoder_class=EncoderModel, **kwargs):
+    def __init__(self, fit_params=['x', 'y'], encoder_class=ConvImageEncoderModel, **kwargs):
         BaseFitModel.__init__(self, encoder_class=encoder_class, renderer_class=Template2DRenderer, fit_params=fit_params,
                               **kwargs)
     
@@ -495,7 +537,7 @@ class Template2DRenderer(BaseRendererModel):
 
     
 class FourierOptics2DModel(BaseFitModel):
-    def __init__(self, fit_params=['x', 'y'], encoder_class=EncoderModel, **kwargs):
+    def __init__(self, fit_params=['x', 'y'], encoder_class=ConvImageEncoderModel, **kwargs):
         BaseFitModel.__init__(self, encoder_class=encoder_class, renderer_class=FourierOptics2DRenderer, fit_params=fit_params, **kwargs)
     
     def get_suppl(self, colored=False):
@@ -629,7 +671,10 @@ def check_model(model, dataloader=None):
     
     if not dataloader is None:
         features, labels = next(iter(dataloader))
-        pred = model(features)
+        if model.image_input:
+            pred = model(features)
+        else:
+            pred = model(labels["id"])
         pred = pred.detach().numpy()
     
         print("input shape: {}, output_shape: {}".format(features.shape, pred.shape))

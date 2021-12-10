@@ -32,8 +32,10 @@ class SimulatedPSFDataset(Dataset):
         
         if isinstance(length, int):
             output_psfs_shape = [length, 1]
+            self.params['id'] = np.arange(length)
         else:
             output_psfs_shape = length
+            self.params['id'] = np.arange(length[0])
             
         if not 'A' in psf_params:
             print("psf amplitude defaulting to [500, 2000]")

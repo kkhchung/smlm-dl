@@ -16,6 +16,8 @@ import matplotlib
 from matplotlib import pyplot as plt
 
 import util, config
+
+from tqdm.auto import tqdm, trange
     
 class FittingTrainer(object):
     _default_optimizer = partial(torch.optim.Adam, lr=1e-4)
@@ -52,14 +54,23 @@ class FittingTrainer(object):
             self.device = torch.device('cpu')
         print("Device: {}".format(self.device))
         
-    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=16):
+    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=16, t=None):
         self.model.to(self.device)
         self.model.train()
         
         # print("-"*100)
-        print("Starting training Epoch # {}".format(epoch_i))
+        # print("Starting training Epoch # {}".format(epoch_i))
+        
+        if t is None:
+            _t = tqdm(total=len(self.train_data_loader))
+        else:
+            _t = t
+            _t.reset(total=len(self.train_data_loader))
         
         for batch_i, (x, y) in enumerate(self.train_data_loader):
+            _t.set_description("Training Batch #{}".format(batch_i))
+            _t.update()
+
             x = x.to(self.device)
             # y = y.to(self.device)
             
@@ -75,15 +86,20 @@ class FittingTrainer(object):
             self.optimizer.step()
             
             if ((batch_i+1) % log_interval == 0) or ((batch_i+1)==len(self.train_data_loader)):
-                print("Epoch # {}, Batch # {} ({}/{}), loss = {:.6f}".format(epoch_i, batch_i,
-                                                                     self.train_data_loader.batch_size * (batch_i+1),
-                                                                     len(self.train_data_loader.dataset),
-                                                                     loss))
-                
+                # print("Epoch # {}, Batch # {} ({}/{}), loss = {:.6f}".format(epoch_i, batch_i,
+                #                                                      self.train_data_loader.batch_size * (batch_i+1),
+                #                                                      len(self.train_data_loader.dataset),
+                #                                                      loss))
+
                 if not tb_logger is None:
                     n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
                     self.log_to_tensorboard(tb_logger, "Training", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])                    
                     self.log_param_to_tensorboard(tb_logger, "Training", n_iter, y, self.model.mapped_params)
+                    
+            _t.set_postfix(train_loss=loss.detach().numpy())
+        
+        if t is None:
+            _t.close()
                 
         # print("-"*100)
         
@@ -119,9 +135,9 @@ class FittingTrainer(object):
         
         loss = sum_loss / len(self.valid_data_loader)
         
-        print("*"*100)
-        print("Validation, average loss = {:.6f}".format(loss))
-        print("*"*100)
+        # print("*"*100)
+        # print("Validation, average loss = {:.6f}".format(loss))
+        # print("*"*100)
         
         if not tb_logger is None:
             self.log_to_tensorboard(tb_logger, "Validate", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
@@ -147,6 +163,8 @@ class FittingTrainer(object):
             axes[1].imshow(pred_numpy_tiled, vmin=vmin, vmax=vmax)
             plt.colorbar(im, ax=axes[1])
             axes[1].set_title('pred')
+            
+        return loss
         
     def train_and_validate(self, n_epoch=100, training_interval=10, validate_interval=100,
                            checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=16):
@@ -161,17 +179,23 @@ class FittingTrainer(object):
         if True: # always pickle the model on running
             self.save_model()
         
-        for epoch_i in range(n_epoch):
-            self.train_single_epoch(epoch_i,
-                                    tb_logger=tb_logger if (epoch_i % training_interval == 0) else None,
-                                    tb_log_limit_images=tb_log_limit_images)
-            
-            if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
-                self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger,
-                              show_images=(epoch_i+1)==n_epoch, tb_log_limit_images=tb_log_limit_images)
+        with trange(n_epoch) as t0:
+            t1 = tqdm()
+            for epoch_i in t0:
+                t0.set_description("Training Epoch #{}".format(epoch_i))
                 
-            if ((epoch_i+1) % checkpoint_interval == 0) or ((epoch_i+1)==n_epoch):
-                self.save_checkpoint()
+                self.train_single_epoch(epoch_i,
+                                        tb_logger=tb_logger if (epoch_i % training_interval == 0) else None,
+                                        tb_log_limit_images=tb_log_limit_images, t=t1)
+
+                if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
+                    validation_loss = self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger,
+                                                    show_images=(epoch_i+1)==n_epoch, tb_log_limit_images=tb_log_limit_images)
+                    t0.set_postfix(val_loss=validation_loss.detach().numpy())
+
+                if ((epoch_i+1) % checkpoint_interval == 0) or ((epoch_i+1)==n_epoch):
+                    self.save_checkpoint()
+            t1.close()
                 
     def log_to_tensorboard(self, tb_logger, label, n_iter, loss, x, pred):
         tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)

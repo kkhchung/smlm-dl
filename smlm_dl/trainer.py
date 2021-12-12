@@ -76,11 +76,7 @@ class FittingTrainer(object):
             
             self.optimizer.zero_grad()
             
-            if self.model.image_input:
-                pred = self.model(x)
-            else:
-                pred = self.model(y["id"])
-            
+            pred = self.model.call_auto(x, y)            
             loss = self.loss_function(pred, x)
             loss.backward()
             self.optimizer.step()
@@ -117,10 +113,7 @@ class FittingTrainer(object):
         with torch.no_grad():
             for batch_i, (x, y) in enumerate(self.valid_data_loader):
                 x = x.to(self.device)
-                if self.model.image_input:
-                    pred = self.model(x)
-                else:
-                    pred = self.model(y["id"])
+                pred = self.model.call_auto(x, y)
                 sum_loss += self.loss_function(pred, x)                
                 
                 for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:

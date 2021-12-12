@@ -11,9 +11,21 @@ import warnings
 
 import util, zernike
 
-class BaseEncoderModel(nn.Module):
+class BaseModel(nn.Module):
+    def call_auto(self, x, y=None):
+        # 'smart' call that workers for both id / image type encoder
+        if y is None:
+            return nn.Module.__call__(self, x)
+        else:
+            if self.image_input:
+                pred = nn.Module.__call__(self, x)
+            else:
+                pred = nn.Module.__call__(self, y["id"])
+            return pred
+
+class BaseEncoderModel(BaseModel):
     def __init__(self, last_out_channels=2, **kwargs):
-        nn.Module.__init__(self)
+        BaseModel.__init__(self)
         self.last_out_channels = last_out_channels
         self.build_model(**kwargs)
         
@@ -149,9 +161,9 @@ class ConvImageEncoderModel(ImageEncoderModel):
         )
     
     
-class FeedbackModel(nn.Module):
+class FeedbackModel(BaseModel):
     def __init__(self, img_size=(32,32), feedback_size=(32,32)):
-        nn.Module.__init__(self)
+        BaseModel.__init__(self)
         
     def forward(self, x, feedback):
         raise NotImplementedError()
@@ -232,13 +244,13 @@ class DiffFeedbackModel(FeedbackModel):
         return feedback
     
     
-class BaseFitModel(nn.Module):
+class BaseFitModel(BaseModel):
     
     def __init__(self, renderer_class, encoder_class, feedback_class=None,
                  img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1,
                  params_ref_override={}, params_ref_no_scale=False,
                  encoder_params={}, renderer_params={}, feedback_params={},):
-        nn.Module.__init__(self)
+        BaseModel.__init__(self)
         self.img_size = img_size
         self.setup_fit_params(img_size, fit_params, max_psf_count, params_ref_override, params_ref_no_scale)
         self.renderer = renderer_class(self.img_size, self.fit_params, **renderer_params)
@@ -374,7 +386,7 @@ class FitParameter(object):
         return text
     
     
-class BaseRendererModel(nn.Module):
+class BaseRendererModel(BaseModel):
     """
     Base renderer class for a few standardized output functions
     """
@@ -383,7 +395,7 @@ class BaseRendererModel(nn.Module):
     params_ind = dict()
     
     def __init__(self, img_size, fit_params):
-        nn.Module.__init__(self)
+        BaseModel.__init__(self)
         self.img_size = img_size
         self.fit_params = fit_params
         

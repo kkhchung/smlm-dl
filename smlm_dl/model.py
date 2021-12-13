@@ -683,21 +683,36 @@ def check_model(model, dataloader=None):
     
     if not dataloader is None:
         features, labels = next(iter(dataloader))
-        if model.image_input:
-            pred = model(features)
-        else:
-            pred = model(labels["id"])
+        pred = model.call_auto(features, labels)
         pred = pred.detach().numpy()
+        features = features.detach().numpy()
     
         print("input shape: {}, output_shape: {}".format(features.shape, pred.shape))
-
-        fig, axes = plt.subplots(1, 2, figsize=(8,3))
-        im = axes[0].imshow(features[0,0])
-        plt.colorbar(im, ax=axes[0])
-        axes[0].set_title("data")
-        im = axes[1].imshow(pred[0,0])
-        plt.colorbar(im, ax=axes[1])
-        axes[1].set_title("predicted")
+        
+        pred_is_image = pred.shape[2]>1 and pred.shape[3]>1
+        
+        n_col = 8
+        n_images = 8 
+        features_tiled, n_col, n_row = util.tile_images(features[:n_images].mean(1), n_col)
+        
+        fig, axes = plt.subplots(3 if pred_is_image else 1, 1,
+                                 figsize=(4*n_col, 3*n_row*(3 if pred_is_image else 1)),
+                                 squeeze=False)  
+        im = axes[0,0].imshow(features_tiled)
+        plt.colorbar(im, ax=axes[0,0])
+        axes[0,0].set_title("data")
+        
+        if pred_is_image:
+            pred_tiled, n_col, n_row = util.tile_images(pred[:n_images].mean(1), n_col)
+            im = axes[1,0].imshow(pred_tiled)
+            plt.colorbar(im, ax=axes[1,0])
+            axes[1,0].set_title("predicted")        
+        
+            diff = pred_tiled-features_tiled
+            diff_max = max(abs(diff.min()), diff.max())
+            im = axes[2,0].imshow(diff, cmap="seismic", vmin=-diff_max, vmax=diff_max)
+            plt.colorbar(im, ax=axes[2,0])
+            axes[2,0].set_title("diff")
     
     if hasattr(model, 'get_suppl'):        
         suppl_dict = model.get_suppl(colored=True)

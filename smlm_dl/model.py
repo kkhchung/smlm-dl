@@ -6,6 +6,7 @@ from torch import nn
 
 import matplotlib
 from matplotlib import pyplot as plt
+from skimage import restoration
 
 import warnings
 
@@ -605,6 +606,12 @@ class FourierOptics2DRenderer(BaseRendererModel):
             # nn.Dropout(p=0.25),
         )
         
+        azimuthal_angle = torch.atan2(US, VS)
+        self.register_buffer('mask', R <=1)
+        self.register_buffer('zern_tilt', zernike.calculate_pupil_phase(self.R, azimuthal_angle, {1:1}))
+        self.register_buffer('zern_tip', zernike.calculate_pupil_phase(self.R, azimuthal_angle, {2:1}))
+        self.register_buffer('zern_defocus', zernike.calculate_pupil_phase(self.R, azimuthal_angle, {4:1}))
+        
         pupil_prop = torch.sqrt(1-torch.minimum(R, torch.ones_like(R))**2)
         if False:
             self.pupil_prop = nn.Sequential(
@@ -627,6 +634,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
     
     def _render_images(self, mapped_params, batch_size, ):        
         pupil_magnitude, pupil_phase, pupil_prop = self._calculate_pupil()        
+        self._substract_tilt_tip_defocus(pupil_phase)
         pupil_phase = pupil_phase[None,...] * torch.ones([batch_size,]+[1,]*3)
         
         pupil_magnitude = nn.functional.pad(pupil_magnitude, self.pupil_padding, mode='constant')
@@ -659,6 +667,15 @@ class FourierOptics2DRenderer(BaseRendererModel):
         pupil_phase = self.pupil_phase(None)
         pupil_prop = self.pupil_prop
         return pupil_magnitude, pupil_phase, pupil_prop
+    
+    def _substract_tilt_tip_defocus(self, pupil_phase):
+        pupil_phase_masked = restoration.unwrap_phase(np.ma.array(pupil_phase.detach().numpy(), mask=~self.mask))
+        pupil_phase_masked = torch.as_tensor(pupil_phase_masked.data[self.mask], dtype=torch.float)
+        with torch.no_grad():
+            for basis in [self.zern_defocus, self.zern_tip, self.zern_tilt]:
+                res = torch.linalg.lstsq(basis[self.mask].reshape(-1, 1), pupil_phase_masked.reshape(-1, 1))[0]
+                pred = basis * res
+                pupil_phase -= pred * self.mask
     
     def get_feedback(self):
         return torch.stack(self._calculate_pupil()).unsqueeze(0)

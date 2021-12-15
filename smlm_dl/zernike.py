@@ -162,4 +162,27 @@ def compensate_tip_tilt(pupil_phase, mask):
         plt.colorbar(im, ax=axes[2])
     
     return corrected_phase
+                
+class PupilPhase(object):
+    def __init__(self, U, V):
+        self.U = U
+        self.V = V
+        self.radial_distance = np.sqrt(U**2 + V**2)
+        self.mask = self.radial_distance > 1
+        self.azimuthal_angle = np.arctan2(V, U)
         
+        self.tilt = np.ma.array(self.calculate_phase({1:1}), mask=self.mask)
+        self.tip = np.ma.array(self.calculate_phase({2:1}), mask=self.mask)
+        self.defocus = np.ma.array(self.calculate_phase({4:1}), mask=self.mask)
+        
+    def calculate_phase(self, zernikes):
+        return calculate_pupil_phase(self.radial_distance, self.azimuthal_angle, zernikes)
+        
+    def remove_tilt_tip_defocus(self, pupil_phase):
+        pupil_phase_masked = restoration.unwrap_phase(np.ma.array(pupil_phase, mask=self.mask))
+        correction_phase = np.zeros_like(pupil_phase_masked)
+        for coeffs in [self.defocus, self.tip, self.tilt]:
+            b = np.linalg.lstsq(coeffs.compressed().reshape(-1,1), pupil_phase_masked.compressed(), rcond=None)[0]
+            pred = coeffs * b
+            correction_phase += pred
+        return correction_phase

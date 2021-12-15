@@ -37,7 +37,7 @@ def calculate_pupil_phase(radial_distance, azimuthal_angle, zernikes):
     else:
         pupil_phase = np.zeros(radial_distance.shape)
     for key, val in zernikes.items():
-        pupil_phase += val * calculate_pupil_from_zernike(key, radial_distance, azimuthal_angle)
+        pupil_phase += val * calculate_pupil_from_zernike(key, radial_distance, azimuthal_angle) * (radial_distance <= 1)
     return pupil_phase
 
 def fit_zernike_from_pupil(pupil, max_j, radial_distance, azimuthal_angle):

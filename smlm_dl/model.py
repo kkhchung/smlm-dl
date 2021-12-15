@@ -598,7 +598,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
             
         pupil_phase = torch.zeros((self.img_size[0], self.img_size[1]))
         nn.init.xavier_normal_(pupil_phase, 0.1)
-        pupil_phase = pupil_phase + zernike.calculate_pupil_phase(R*(R<=1), torch.atan2(US, VS), pupil_params.get("phase_init_zern", {}))
+        pupil_phase = pupil_phase + zernike.calculate_pupil_phase(R, torch.atan2(US, VS), pupil_params.get("phase_init_zern", {}))
         self.pupil_phase = nn.Sequential(
             ParameterModule(pupil_phase),
             nn.Identity(),

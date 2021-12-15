@@ -132,10 +132,10 @@ class ConvImageEncoderModel(ImageEncoderModel):
     
     def _encode_block(self, in_channels, out_channels):
         return nn.Sequential(
-            nn.GroupNorm(in_channels, in_channels),
+            # nn.GroupNorm(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.GroupNorm(out_channels, out_channels),
+            # nn.GroupNorm(out_channels, out_channels),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.ReLU(),
             nn.MaxPool2d(2),
@@ -591,7 +591,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
             self.pupil_magnitude = nn.Sequential(
                 ParameterModule(pupil_magnitude),
                 nn.ReLU(),
-                nn.Dropout(p=0.25),
+                # nn.Dropout(p=0.25),
             )
         else:
             self.pupil_magnitude = pupil_magnitude
@@ -602,7 +602,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
         self.pupil_phase = nn.Sequential(
             ParameterModule(pupil_phase),
             nn.Identity(),
-            nn.Dropout(p=0.25),
+            # nn.Dropout(p=0.25),
         )
         
         pupil_prop = torch.sqrt(1-torch.minimum(R, torch.ones_like(R))**2)
@@ -610,7 +610,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
             self.pupil_prop = nn.Sequential(
                 ParameterModule(torch.ones(1)*0.1),
                 nn.Identity(),
-                nn.Dropout(p=0.25),
+                # nn.Dropout(p=0.25),
             )
         else:
             self.pupil_prop = pupil_prop            

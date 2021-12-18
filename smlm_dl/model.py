@@ -461,17 +461,24 @@ class Template2DModel(BaseFitModel):
                               **kwargs)
     
     def get_suppl(self, colored=False):
+        res = {'images': {},
+               }
         template = self.renderer._calculate_template(True).detach().numpy()
         template_2x = self.renderer._calculate_template(False).detach().numpy()
         if colored:
             template = util.color_images(template, full_output=True)
             template_2x = util.color_images(template_2x, full_output=True)
-        return {'images': {'template':template, 'template 2x':template_2x, },
-               }
+        res['images'].update({'template':template, 'template 2x':template_2x, })
+        
+        if not self.renderer.conv is None:
+            conv_kernel = self.renderer.conv(None).detach().numpy()[0,0]
+            conv_kernel = util.color_images(conv_kernel, full_output=True)
+            res['images']['conv'] = conv_kernel
+        return res
 
     
 class Template2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params, template_init=None, template_padding=None):
+    def __init__(self, img_size, fit_params, template_init=None, template_padding=None, conv=None):
         # The 2x sampling avoids the banding artifact that is probably caused by FFT subpixels shifts
         # This avoids any filtering in the spatial / fourier domain
 
@@ -514,7 +521,14 @@ class Template2DRenderer(BaseRendererModel):
         ky = torch.fft.fftshift(torch.fft.fftfreq(template_size_scaled[1]*2))
         KX, KY = torch.meshgrid(kx, ky, indexing='ij')
         self.register_buffer('KX', KX, False)
-        self.register_buffer('KY', KY, False)   
+        self.register_buffer('KY', KY, False)
+        
+        if not conv is None:            
+            self.conv = nn.Sequential(ParameterModule(torch.ones(1, 1, conv, conv) / conv**2),
+                                      nn.ReLU(),
+                                     )
+        else:
+            self.conv = None
     
     def _render_images(self, mapped_params, batch_size=None, ):
         # template is padded, shifted, croped and then down-sampled
@@ -533,6 +547,11 @@ class Template2DRenderer(BaseRendererModel):
                                             padding[2]+self.template_padding_scaled[1]:-padding[3]-self.template_padding_scaled[1],
                                            ]
         shifted_template = self.template_pooling(shifted_template)
+        
+        if not self.conv is None:
+            kernel = self.conv(None)
+            shifted_template = torch.nn.functional.pad(shifted_template, (kernel.shape[-1]//2,)*2 + (kernel.shape[-2]//2,)*2, mode="reflect")
+            shifted_template = torch.nn.functional.conv2d(shifted_template, kernel, padding=0)
         
         shifted_template = shifted_template * mapped_params['A'] + mapped_params['bg']
         shifted_template = shifted_template * (mapped_params['p']>0.5)

@@ -1,4 +1,5 @@
 import numpy as np
+import torch
 from torch.utils.data import Dataset
 import matplotlib
 from matplotlib import pyplot as plt
@@ -20,6 +21,7 @@ class ImageDataset(Dataset):
     def __init__(self, out_size=(32, 32), length=512, dropout_p=0,
                  image_params={},
                  noise_params={'poisson':True, 'gaussian':10},
+                 conv_kernel=None,
                  normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]},):
         Dataset.__init__(self)
         
@@ -48,18 +50,24 @@ class ImageDataset(Dataset):
         images = images * self.params['A'].reshape(-1, 1, 1)
         
         images = images.reshape(output_image_shape[0], output_image_shape[1], images.shape[1], images.shape[2])
-        images = images.sum(axis=1)        
+        images = images.sum(axis=1, keepdims=True)        
         
-        images = images + self.params['bg'].reshape(-1, 1, 1)
+        images = images + self.params['bg'].reshape(-1, 1, 1, 1)
+        
+        if not conv_kernel is None:
+            conv_kernel = torch.as_tensor(conv_kernel, dtype=torch.float).reshape(1, 1, conv_kernel.shape[-2], conv_kernel.shape[-1])
+            images = torch.as_tensor(images, dtype=torch.float)
+            images = torch.nn.functional.pad(images, (conv_kernel.shape[-1]//2,)*2 + (conv_kernel.shape[-2]//2,)*2, mode="reflect")
+            images = torch.nn.functional.conv2d(images, conv_kernel, padding=0).numpy()
         
         if len(noise_params) > 0:
             images = self.add_noise(images, noise_params)
 
         if normalize:
-            images -= images.min(axis=(1,2), keepdims=True)
-            images /= images.max(axis=(1,2), keepdims=True)
+            images -= images.min(axis=(2,3), keepdims=True)
+            images /= images.max(axis=(2,3), keepdims=True)
             
-        self.images = images.astype(np.float32)[:, None, ...]
+        self.images = images.astype(np.float32)
         
     def set_params(self, output_image_shape, image_params):
         print("Image parameters settings: {}".format(image_params))
@@ -113,6 +121,7 @@ class SingleImageDataset(ImageDataset):
     def __init__(self, data, out_size=(64, 64), length=16, dropout_p=0,
                  image_params={},
                  noise_params={'poisson':True, 'gaussian':10},
+                 conv_kernel = None,
                  normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]}):
         
         default_image_params = {
@@ -129,6 +138,7 @@ class SingleImageDataset(ImageDataset):
         ImageDataset.__init__(self, out_size=out_size, length=length, dropout_p=dropout_p,
                               image_params=_image_params,
                               noise_params=noise_params,
+                              conv_kernel=conv_kernel,
                               normalize=normalize, augmentations=augmentations)
         
     def generate_images(self, size, length, shifts, image_params):

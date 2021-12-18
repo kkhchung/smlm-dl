@@ -70,7 +70,7 @@ class ImageDataset(Dataset):
         self.images = images.astype(np.float32)
         
     def set_params(self, output_image_shape, image_params):
-        print("Image parameters settings: {}".format(image_params))
+        # print("Image parameters settings: {}".format(image_params))
         self.params = {}
         self.params['id'] = np.arange(output_image_shape[0])
         self.params['A'] = np.random.uniform(image_params['A'][0], image_params['A'][1], output_image_shape)
@@ -328,6 +328,11 @@ def inspect_images(dataset, indices=None):
                          ha='left', va='bottom',
                          fontsize='medium',
                          transform=axes[j].transAxes)
+            
+    fig, axes = plt.subplots(1, len(dataset.params), figsize=(4*len(dataset.params), 3))
+    for i, (key, val) in enumerate(dataset.params.items()):        
+        axes[i].hist(val.flatten(), bins=20)
+        axes[i].set_xlabel(key)
     
     if hasattr(dataset, 'pupil'):
         fig, axes = plt.subplots(1, 3, figsize=(4*2 + 8, 3), gridspec_kw={'width_ratios': [1,1,3]})

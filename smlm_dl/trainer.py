@@ -142,20 +142,28 @@ class FittingTrainer(object):
             vmin = min(x_numpy.min(), pred_numpy.min())
             vmax = max(x_numpy.max(), pred_numpy.max())
             
-            n_col = 8
+            diff = pred_numpy - x_numpy
+            diff_vmax = max(-diff.min(), diff.max())
+            diff_vmin = -diff_vmax
+            
+            n_col = min(8, tb_log_limit_images)
             n_row = 0
             x_numpy_tiled, _n_col, _n_row = util.tile_images(x_numpy, n_col=n_col)
             n_row += _n_row
             pred_numpy_tiled, _n_col, _n_row = util.tile_images(pred_numpy, n_col=n_col)
             n_row += _n_row
+            diff_tiled, _n_col, _n_row = util.tile_images(pred_numpy, n_col=n_col)
+            n_row += _n_row
             
-            fig, axes = plt.subplots(2, 1, figsize=(n_col*2, n_row*1.5))
-            im=axes[0].imshow(x_numpy_tiled, vmin=vmin, vmax=vmax)
-            plt.colorbar(im, ax=axes[0])
-            axes[0].set_title('data')
-            axes[1].imshow(pred_numpy_tiled, vmin=vmin, vmax=vmax)
-            plt.colorbar(im, ax=axes[1])
-            axes[1].set_title('pred')
+            fig, axes = plt.subplots(3, 1, figsize=(n_col*4, n_row*3))
+            for i, (label, (img, vmin, vmax, vsym)) in enumerate({'data': (x_numpy_tiled, vmin, vmax, False),
+                                                         'pred': (pred_numpy_tiled, vmin, vmax, False),
+                                                         'diff': (diff_tiled, diff_vmin, diff_vmax, True),
+                                                         }.items()):
+                colored_img, norm, cmap = util.color_images(img, vmin=vmin, vmax=vmax, vsym=vsym, full_output=True)
+                axes[i].imshow(colored_img)
+                plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[i])
+                axes[i].set_title(label)
             
         return loss
         
@@ -196,9 +204,14 @@ class FittingTrainer(object):
         pred_numpy = pred.detach().numpy()
         vmin = min(x_numpy.min(), pred_numpy.min())
         vmax = max(x_numpy.max(), pred_numpy.max())
+        
+        diff = pred_numpy - x_numpy
+        diff_vmax = max(-diff.min(), diff.max())
+        diff_vmin = -diff_vmax
+        
         tb_logger.add_images("{}/data".format(label), util.color_images(x_numpy, vmin=vmin, vmax=vmax), n_iter)
         tb_logger.add_images("{}/pred".format(label), util.color_images(pred_numpy, vmin=vmin, vmax=vmax), n_iter)
-        tb_logger.add_images("{}/diff".format(label), util.color_images(pred_numpy-x_numpy, vmin=vmin, vmax=vmax, vsym=True), n_iter)
+        tb_logger.add_images("{}/diff".format(label), util.color_images(diff, vmin=diff_vmin, vmax=diff_vmax, vsym=True), n_iter)
         
         if hasattr(self.model, 'get_suppl'):
             suppl_dict = self.model.get_suppl(colored=True)

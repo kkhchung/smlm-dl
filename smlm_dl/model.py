@@ -591,7 +591,8 @@ class FourierOptics2DModel(BaseFitModel):
                }
 
 class FourierOptics2DRenderer(BaseRendererModel):
-    def __init__(self, img_size, fit_params, pupil_params={'scale':0.75, 'apod':False, 'phase_init_zern':{}},):
+    def __init__(self, img_size, fit_params,
+                 pupil_params={'scale':0.75, 'apod':False, 'phase_init_zern':{}, 'remove_tilt_tip_defocus':False},):
 
         BaseRendererModel.__init__(self, img_size, fit_params)
         
@@ -621,7 +622,8 @@ class FourierOptics2DRenderer(BaseRendererModel):
         pupil_phase = pupil_phase + zernike.calculate_pupil_phase(R, torch.atan2(US, VS), pupil_params.get("phase_init_zern", {}))
         self.pupil_phase = nn.Sequential(
             ParameterModule(pupil_phase),
-            nn.Identity(),
+            # nn.Identity(),
+            # nn.Hardtanh(-np.pi, np.pi),
             # nn.Dropout(p=0.25),
         )
         
@@ -649,11 +651,12 @@ class FourierOptics2DRenderer(BaseRendererModel):
         ky = torch.fft.fftshift(torch.fft.fftfreq(self.img_size[1]*pupil_padding_factor))
         KX, KY = torch.meshgrid(kx, ky, indexing='ij')
         self.register_buffer('KX', KX, False)
-        self.register_buffer('KY', KY, False)        
+        self.register_buffer('KY', KY, False)
+        
+        self.remove_tilt_tip_defocus = pupil_params["remove_tilt_tip_defocus"]
     
     def _render_images(self, mapped_params, batch_size, ):        
         pupil_magnitude, pupil_phase, pupil_prop = self._calculate_pupil()        
-        self._substract_tilt_tip_defocus(pupil_phase)
         pupil_phase = pupil_phase[None,...] * torch.ones([batch_size,]+[1,]*3)
         
         pupil_magnitude = nn.functional.pad(pupil_magnitude, self.pupil_padding, mode='constant')
@@ -684,17 +687,22 @@ class FourierOptics2DRenderer(BaseRendererModel):
         else:
             pupil_magnitude = self.pupil_magnitude
         pupil_phase = self.pupil_phase(None)
+        if self.remove_tilt_tip_defocus:
+            pupil_phase = self._substract_tilt_tip_defocus(pupil_phase)
         pupil_prop = self.pupil_prop
         return pupil_magnitude, pupil_phase, pupil_prop
     
     def _substract_tilt_tip_defocus(self, pupil_phase):
-        pupil_phase_masked = restoration.unwrap_phase(np.ma.array(pupil_phase.detach().numpy(), mask=~self.mask))
+        pupil_phase_masked = restoration.unwrap_phase(np.fmod(np.ma.array(pupil_phase.detach().numpy(), mask=~self.mask), np.pi))
+        diff = pupil_phase_masked.filled(0) - pupil_phase.detach().numpy()
+        diff[~self.mask] = 0
+        ret = pupil_phase + torch.as_tensor(diff, dtype=torch.float)
         pupil_phase_masked = torch.as_tensor(pupil_phase_masked.data[self.mask], dtype=torch.float)
-        with torch.no_grad():
-            for basis in [self.zern_defocus, self.zern_tip, self.zern_tilt]:
-                res = torch.linalg.lstsq(basis[self.mask].reshape(-1, 1), pupil_phase_masked.reshape(-1, 1))[0]
-                pred = basis * res
-                pupil_phase -= pred * self.mask
+        for basis in [self.zern_defocus, self.zern_tip, self.zern_tilt]:
+            res = torch.linalg.lstsq(basis[self.mask].reshape(-1, 1), pupil_phase_masked.reshape(-1, 1))[0]
+            pred = basis * res
+            ret = ret - pred * self.mask
+        return ret
     
     def get_feedback(self):
         return torch.stack(self._calculate_pupil()).unsqueeze(0)

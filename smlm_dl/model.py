@@ -170,7 +170,7 @@ class UnetEncoderModel(ImageEncoderModel):
                                   last_out_channels=last_out_channels,
                                   **{"depth":depth, "first_layer_out_channels":first_layer_out_channels, })
         
-    def build_model(self, depth, first_layer_out_channels, ):        
+    def build_model(self, depth, first_layer_out_channels, ):
         self.encoders = nn.ModuleDict()
         for i in range(depth):
             in_channels = self.in_channels if i == 0 else 2**(i-1) * first_layer_out_channels
@@ -180,7 +180,7 @@ class UnetEncoderModel(ImageEncoderModel):
             self.encoders["pool_layer{}".format(i)] = self._pool_block(out_channels, out_channels)
             
         self.neck = self._conv_block(int(2**(depth-1) * first_layer_out_channels),
-                                     (2**(depth) * first_layer_out_channels))        
+                                     (2**(depth) * first_layer_out_channels))
         
         self.decoders = nn.ModuleDict()
         for i in range(depth):
@@ -218,11 +218,12 @@ class UnetEncoderModel(ImageEncoderModel):
             # nn.GroupNorm(out_channels, out_channels),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.ReLU(),
-            nn.Dropout2d(0.5),
+            # nn.Dropout2d(0.5),
         )
     
     def _pool_block(self, in_channels, out_channels):
         return nn.Sequential(
+            nn.Dropout2d(0.5),
             nn.MaxPool2d(2),
         )
     

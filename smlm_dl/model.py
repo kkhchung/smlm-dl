@@ -436,6 +436,169 @@ class BaseFitModel(BaseModel):
         # print(mapped_params)
         images = self.renderer.render_images(mapped_params, num, True)
         return images
+    
+
+class UnetFitModel(BaseFitModel):
+    def __init__(self, renderer_class, encoder_class, feedback_class=None,
+                 img_size=(32,32), fit_params=['x', 'y', ], max_psf_count=1,
+                 params_ref_override={}, params_ref_no_scale=False,
+                 encoder_params={}, renderer_params={}, feedback_params={},):
+        
+        BaseFitModel.__init__(self, renderer_class=renderer_class, encoder_class=encoder_class, feedback_class=feedback_class,
+                 img_size=img_size, fit_params=fit_params, max_psf_count=max_psf_count,
+                 params_ref_override=params_ref_override, params_ref_no_scale=params_ref_no_scale,
+                 encoder_params=encoder_params, renderer_params=renderer_params, feedback_params=feedback_params,)
+        
+        self._set_buffers()
+        self.cached_images = dict()
+    
+    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
+        self.params_ref = dict()
+        self.params_ref.update({
+            'x': FitParameter(nn.Identity(), 0, 1, 0, True),
+            'y': FitParameter(nn.Identity(), 0, 1, 0, True),
+            # 'z': FitParameter(nn.Tanh(), 0, 2 * np.pi, 0, True),
+            'A': FitParameter(nn.ReLU(), 0, 1, 1, True),
+            'bg': FitParameter(nn.Identity(), 0, 1, 0, False),
+            'p': FitParameter(nn.Sigmoid(), 0, 1, 1, True)
+        })
+        self.params_ref.update(new_params_ref)
+        
+        if params_ref_no_scale is True:
+            for key in self.params_ref:
+                self.params_ref[key] = FitParameter(nn.Identity(), 0, 1,
+                                                    (self.params_ref[key].default + self.params_ref[key].offset) * self.params_ref[key].scaling,
+                                                    self.params_ref[key].per_psf)
+
+        detailed_fit_params = dict()
+        params_ref_sorted = dict()
+        n_fit_params = 0
+        for param in fit_params:
+            if not param in self.params_ref:
+                raise Exception("fit param ({}) not recognised for this model".format(param))
+            repeats = max_psf_count if self.params_ref[param].per_psf else 1
+            detailed_fit_params[param] = list()
+            for i in range(repeats):
+                detailed_fit_params[param].append(self.params_ref[param].copy())
+                n_fit_params += 1
+            params_ref_sorted[param] = self.params_ref.pop(param)
+        params_ref_sorted.update(self.params_ref)
+        self.params_ref.clear() 
+        self.params_ref.update(params_ref_sorted)
+        self.fit_params = detailed_fit_params
+        self.n_fit_params = n_fit_params
+        
+    def map_params(self, x):
+        i = 0
+        # extracted_params = self._extract_params_from_split_images(self._split_masks(x[:,[0]]), x[:,[0,1,2,3]], self.fit_params)
+        extracted_params = self._extract_params(x[:,:10])
+        i += 10
+        mapped_params = dict()
+        for param in self.params_ref:
+            if not param in self.fit_params:
+                mapped_params[param] = self.params_ref[param].default
+            else:
+                repeats = len(self.fit_params[param])
+                temp_params = x[:, i:i+repeats, ...]
+                mapped_params[param] = torch.empty(temp_params.shape[:2] + (1,)*2)
+                
+                for j in range(temp_params.shape[1]):
+                    if param in extracted_params:
+                        mapped_params[param][:, j, 0, 0] = extracted_params[param][:, j]
+                    else:
+                        i += repeats
+                        mapped_params[param][:, j] = self.fit_params[param][j].activation(temp_params[:, j]).sum(dim=(-2,-1), keepdims=True)
+                    mapped_params[param][:, j] = torch.add(mapped_params[param][:, j], self.fit_params[param][j].offset)
+                    mapped_params[param][:, j] = torch.mul(mapped_params[param][:, j], self.fit_params[param][j].scaling)
+                
+        return mapped_params
+    
+    def _set_buffers(self):
+        xs = torch.arange(0, self.img_size[0], dtype=torch.float)
+        xs -= xs.mean()
+        ys = torch.arange(0, self.img_size[1], dtype=torch.float)
+        ys -= ys.mean()
+        
+        XS, YS = torch.meshgrid(xs, ys, indexing='ij')
+        XYS = torch.stack((XS, YS), dim=0).reshape(1, 1, 2, self.img_size[0], self.img_size[1])
+        
+        self.register_buffer('XYS', XYS)
+        
+    def _extract_params(self, x):
+        self.cached_images['labelled'] = x.clone()[:,0].detach()
+        mapped_params = dict()
+        mapped_params['A'] = x.sum(dim=(-2,-1))
+        x = x.unsqueeze(2)
+        x = x - x.amin(dim=(-2,-1), keepdims=True) + 1e-6
+        x_weighted = x * self.XYS
+        params = x_weighted.sum(dim=(-2,-1)) / x.sum(dim=(-2,-1))
+        mapped_params['x'] = params[:, :, 0]
+        mapped_params['y'] = params[:, :, 1]
+        return mapped_params
+    
+    def _extract_params_from_split_images(self, mask, x, fit_params):
+        x = x[:,[0]] * mask
+        mapped_params = dict()
+        
+        mapped_params['A'] = x.sum(dim=(-2,-1))
+        a_sort_arg = torch.argsort(mapped_params['A'], dim=-1, descending=True)
+        a_sort_arg = (np.arange(a_sort_arg.shape[0]).reshape(-1,1), a_sort_arg)
+        mapped_params['A'] = mapped_params['A'][a_sort_arg[0], a_sort_arg[1]]
+        
+        self.cached_images['masks'] = mask[0, a_sort_arg[1][0]].detach()
+        self.cached_images['maskedA'] = x[0, a_sort_arg[1][0]].detach()
+            
+        x = x.unsqueeze(2)
+        x = x - x.amin(dim=(-2,-1), keepdims=True) + 1e-6
+        
+        if 'x' in fit_params or 'y' in fit_params:
+            x_weighted = x * self.XYS
+            params = x_weighted.sum(dim=(-2,-1)) / x.sum(dim=(-2,-1))
+            mapped_params['x'] = params[:, :, 0][a_sort_arg[0], a_sort_arg[1]]
+            mapped_params['y'] = params[:, :, 1][a_sort_arg[0], a_sort_arg[1]]
+        return mapped_params
+    
+    def _split_images(self, x):
+        x_masks = self._split_masks(x)
+        out_x = x
+        out_x = out_x * x_masks.type(torch.float)
+        return out_x
+    
+    def _split_masks(self, x):
+        # doesn't really work
+        # missing proper connected-component labeling implementation in pytorch
+
+        masks = x > torch.minimum(x.mean(dim=(-2,-1), keepdims=True), torch.zeros(x.shape))
+        numbered_masks = torch.zeros(masks.shape, dtype=torch.float)
+        numbered_masks[masks] = reversed(torch.arange(1, masks.sum()+1).type(torch.float))#[torch.randperm(masks.sum())]
+
+        for i in range(32):
+            numbered_masks[:] = torch.nn.functional.max_pool2d(numbered_masks, 3, stride=1, dilation=1, padding=1) * masks
+            
+        self.cached_images['labelled'] = numbered_masks.clone()[:,0].detach()
+            
+        out_x = torch.zeros((x.shape[0], 10, x.shape[2], x.shape[3]), dtype=bool)
+        for i in range(10):
+            mask_num = numbered_masks.amax(dim=(-2,-1), keepdims=True)
+            # out_x[:,[i],:,:] = numbered_masks==mask_num
+            out_x[:,[i],:,:] = torch.isclose(numbered_masks, mask_num)
+            numbered_masks.masked_fill_(out_x[:,[i],:,:], 0)
+            
+            # couldn't run conv2d outside loop without convoluting between channels? bug?
+            _temp = nn.functional.pad(out_x[:,[i],:,:].type(torch.float), (1, 1, 1, 1))
+            _temp = nn.functional.conv2d(_temp, torch.ones((2,2)).repeat(1,1,1,1), padding='same', ) > 0
+            _temp = _temp[:,:,1:-1,1:-1]
+            out_x[:,[i],:,:] = _temp
+            
+        return out_x
+    
+    def get_suppl(self, colored=False):
+        res = {'images': {},
+               }
+        for key, val in self.cached_images.items():
+            for i in range(2):
+                res['images']['{}{}'.format(key,i)] = util.color_images(val[i], full_output=True)
+        return res
         
     
 class FitParameter(object):

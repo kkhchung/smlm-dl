@@ -490,7 +490,6 @@ class UnetFitModel(BaseFitModel):
         
     def map_params(self, x):
         i = 0
-        # extracted_params = self._extract_params_from_split_images(self._split_masks(x[:,[0]]), x[:,[0,1,2,3]], self.fit_params)
         extracted_params = self._extract_params(x[:,:10])
         i += 10
         mapped_params = dict()
@@ -535,62 +534,6 @@ class UnetFitModel(BaseFitModel):
         mapped_params['x'] = params[:, :, 0]
         mapped_params['y'] = params[:, :, 1]
         return mapped_params
-    
-    def _extract_params_from_split_images(self, mask, x, fit_params):
-        x = x[:,[0]] * mask
-        mapped_params = dict()
-        
-        mapped_params['A'] = x.sum(dim=(-2,-1))
-        a_sort_arg = torch.argsort(mapped_params['A'], dim=-1, descending=True)
-        a_sort_arg = (np.arange(a_sort_arg.shape[0]).reshape(-1,1), a_sort_arg)
-        mapped_params['A'] = mapped_params['A'][a_sort_arg[0], a_sort_arg[1]]
-        
-        self.cached_images['masks'] = mask[0, a_sort_arg[1][0]].detach()
-        self.cached_images['maskedA'] = x[0, a_sort_arg[1][0]].detach()
-            
-        x = x.unsqueeze(2)
-        x = x - x.amin(dim=(-2,-1), keepdims=True) + 1e-6
-        
-        if 'x' in fit_params or 'y' in fit_params:
-            x_weighted = x * self.XYS
-            params = x_weighted.sum(dim=(-2,-1)) / x.sum(dim=(-2,-1))
-            mapped_params['x'] = params[:, :, 0][a_sort_arg[0], a_sort_arg[1]]
-            mapped_params['y'] = params[:, :, 1][a_sort_arg[0], a_sort_arg[1]]
-        return mapped_params
-    
-    def _split_images(self, x):
-        x_masks = self._split_masks(x)
-        out_x = x
-        out_x = out_x * x_masks.type(torch.float)
-        return out_x
-    
-    def _split_masks(self, x):
-        # doesn't really work
-        # missing proper connected-component labeling implementation in pytorch
-
-        masks = x > torch.minimum(x.mean(dim=(-2,-1), keepdims=True), torch.zeros(x.shape))
-        numbered_masks = torch.zeros(masks.shape, dtype=torch.float)
-        numbered_masks[masks] = reversed(torch.arange(1, masks.sum()+1).type(torch.float))#[torch.randperm(masks.sum())]
-
-        for i in range(32):
-            numbered_masks[:] = torch.nn.functional.max_pool2d(numbered_masks, 3, stride=1, dilation=1, padding=1) * masks
-            
-        self.cached_images['labelled'] = numbered_masks.clone()[:,0].detach()
-            
-        out_x = torch.zeros((x.shape[0], 10, x.shape[2], x.shape[3]), dtype=bool)
-        for i in range(10):
-            mask_num = numbered_masks.amax(dim=(-2,-1), keepdims=True)
-            # out_x[:,[i],:,:] = numbered_masks==mask_num
-            out_x[:,[i],:,:] = torch.isclose(numbered_masks, mask_num)
-            numbered_masks.masked_fill_(out_x[:,[i],:,:], 0)
-            
-            # couldn't run conv2d outside loop without convoluting between channels? bug?
-            _temp = nn.functional.pad(out_x[:,[i],:,:].type(torch.float), (1, 1, 1, 1))
-            _temp = nn.functional.conv2d(_temp, torch.ones((2,2)).repeat(1,1,1,1), padding='same', ) > 0
-            _temp = _temp[:,:,1:-1,1:-1]
-            out_x[:,[i],:,:] = _temp
-            
-        return out_x
     
     def get_suppl(self, colored=False):
         res = {'images': {},

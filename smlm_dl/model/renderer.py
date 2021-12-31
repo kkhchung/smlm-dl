@@ -1,8 +1,9 @@
+import functools
 import numpy as np
 import torch
 from torch import nn
 
-import zernike
+import util, zernike
 from . import base
 
 
@@ -150,6 +151,22 @@ class Template2DRenderer(BaseRendererModel):
     
     def get_feedback(self):
         return self._calculate_template(True).unsqueeze(0).unsqueeze(0)
+    
+    def get_suppl(self, colored=False):
+        res = {'images': {},
+               }
+        template = self._calculate_template(True).detach().numpy()
+        template_2x = self._calculate_template(False).detach().numpy()
+        if colored:
+            template = util.color_images(template, full_output=True)
+            template_2x = util.color_images(template_2x, full_output=True)
+        res['images'].update({'template':template, 'template 2x':template_2x, })
+        
+        if not self.conv is None:
+            conv_kernel = self.conv(None).detach().numpy()[0,0]
+            conv_kernel = util.color_images(conv_kernel, full_output=True)
+            res['images']['conv'] = conv_kernel
+        return res
 
 
 class FourierOptics2DRenderer(BaseRendererModel):
@@ -268,3 +285,21 @@ class FourierOptics2DRenderer(BaseRendererModel):
     
     def get_feedback(self):
         return torch.stack(self._calculate_pupil()).unsqueeze(0)
+    
+    def get_suppl(self, colored=False):
+        pupil_magnitude, pupil_phase, pupil_prop = self._calculate_pupil()
+        pupil_magnitude = pupil_magnitude.detach().numpy()
+        pupil_phase = pupil_phase.detach().numpy()
+        pupil_prop = pupil_prop.detach().numpy()
+        
+        zern_coeffs = zernike.fit_zernike_from_pupil(pupil_magnitude*np.exp(1j*pupil_phase), 16, self.R, np.arctan2(self.US, self.VS))
+        zern_plot = functools.partial(zernike.plot_zernike_coeffs, zernike_coeffs=zern_coeffs)
+        
+        if colored:
+            pupil_magnitude = util.color_images(pupil_magnitude, full_output=True)
+            pupil_phase = util.color_images(pupil_phase, vsym=True, full_output=True)
+            pupil_prop = util.color_images(pupil_prop, full_output=True)
+            
+        return {'images':{'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase, 'z propagate':pupil_prop},
+                'plots':{'zernike': {'plot':zern_plot, 'kwargs':{'figsize':(8,3)}}},
+               }

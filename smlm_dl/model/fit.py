@@ -148,6 +148,12 @@ class BaseFitModel(base.BaseModel):
         images = self.renderer.render_images(mapped_params, num, True)
         return images
     
+    def get_suppl(self, colored=False):
+        ret = dict()
+        if hasattr(self.renderer, 'get_suppl'):
+            ret.update(self.renderer.get_suppl(colored=colored))
+        return ret
+
 
 class UnetFitModel(BaseFitModel):
     def __init__(self, renderer_class, encoder_class, feedback_class=None,
@@ -235,7 +241,7 @@ class UnetFitModel(BaseFitModel):
         self.register_buffer('XYS', XYS)
         
     def _extract_params(self, x):
-        self.cached_images['labelled'] = x.clone()[:,0].detach()
+        self.cached_images['labelled'] = x.detach()[0,:]
         mapped_params = dict()
         mapped_params['A'] = x.sum(dim=(-2,-1))
         x = x.unsqueeze(2)
@@ -247,12 +253,16 @@ class UnetFitModel(BaseFitModel):
         return mapped_params
     
     def get_suppl(self, colored=False):
-        res = {'images': {},
-               }
+        images = {}
         for key, val in self.cached_images.items():
-            for i in range(2):
-                res['images']['{}{}'.format(key,i)] = util.color_images(val[i], full_output=True)
-        return res
+            images['{}'.format(key)] = util.color_images(util.tile_images(val[:9], 3)[0], full_output=True)
+                
+        ret = super().get_suppl(colored=colored)
+        if not 'images' in ret:
+            ret['images'] = images
+        else:
+            ret['images'].update(images)
+        return ret
 
 
 class Gaussian2DModel(BaseFitModel):
@@ -272,42 +282,8 @@ class Template2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], encoder_class=encoder.ConvImageEncoderModel, **kwargs):
         super().__init__(encoder_class=encoder_class, renderer_class=renderer.Template2DRenderer, fit_params=fit_params,
                               **kwargs)
-    
-    def get_suppl(self, colored=False):
-        res = {'images': {},
-               }
-        template = self.renderer._calculate_template(True).detach().numpy()
-        template_2x = self.renderer._calculate_template(False).detach().numpy()
-        if colored:
-            template = util.color_images(template, full_output=True)
-            template_2x = util.color_images(template_2x, full_output=True)
-        res['images'].update({'template':template, 'template 2x':template_2x, })
-        
-        if not self.renderer.conv is None:
-            conv_kernel = self.renderer.conv(None).detach().numpy()[0,0]
-            conv_kernel = util.color_images(conv_kernel, full_output=True)
-            res['images']['conv'] = conv_kernel
-        return res
 
 
 class FourierOptics2DModel(BaseFitModel):
     def __init__(self, fit_params=['x', 'y'], encoder_class=encoder.ConvImageEncoderModel, **kwargs):
         super().__init__(encoder_class=encoder_class, renderer_class=renderer.FourierOptics2DRenderer, fit_params=fit_params, **kwargs)
-    
-    def get_suppl(self, colored=False):
-        pupil_magnitude, pupil_phase, pupil_prop = self.renderer._calculate_pupil()
-        pupil_magnitude = pupil_magnitude.detach().numpy()
-        pupil_phase = pupil_phase.detach().numpy()
-        pupil_prop = pupil_prop.detach().numpy()
-        
-        zern_coeffs = zernike.fit_zernike_from_pupil(pupil_magnitude*np.exp(1j*pupil_phase), 16, self.renderer.R, np.arctan2(self.renderer.US, self.renderer.VS))
-        zern_plot = functools.partial(zernike.plot_zernike_coeffs, zernike_coeffs=zern_coeffs)
-        
-        if colored:
-            pupil_magnitude = util.color_images(pupil_magnitude, full_output=True)
-            pupil_phase = util.color_images(pupil_phase, vsym=True, full_output=True)
-            pupil_prop = util.color_images(pupil_prop, full_output=True)
-            
-        return {'images':{'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase, 'z propagate':pupil_prop},
-                'plots':{'zernike': {'plot':zern_plot, 'kwargs':{'figsize':(8,3)}}},
-               }

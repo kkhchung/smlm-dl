@@ -63,7 +63,7 @@ class DirectMapperModel(BaseMapperModel):
         i = 0
         for param in self.params_ref:
             if not param in self.fit_params:
-                mapped_params[param] = torch.as_tensor(self.params_ref[param].default)
+                mapped_params[param] = torch.as_tensor(self.params_ref[param].default, dtype=torch.float32)
             else:
                 repeats = len(self.fit_params[param])
                 temp_params = x[:, i:i+repeats, ...]

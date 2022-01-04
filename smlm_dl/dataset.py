@@ -73,15 +73,15 @@ class ImageDataset(Dataset):
         # print("Image parameters settings: {}".format(image_params))
         self.params = {}
         self.params['id'] = np.arange(output_image_shape[0])
-        self.params['A'] = np.random.uniform(image_params['A'][0], image_params['A'][1], output_image_shape)
-        self.params['bg'] = np.random.uniform(image_params['bg'][0], image_params['bg'][1], output_image_shape[0])
-        self.params['x'] = np.random.uniform(image_params['x'][0], image_params['x'][1], output_image_shape)
-        self.params['y'] = np.random.uniform(image_params['y'][0], image_params['y'][1], output_image_shape)
+        self.params['A'] = np.random.uniform(image_params['A'][0], image_params['A'][1], output_image_shape).astype(np.float32)
+        self.params['bg'] = np.random.uniform(image_params['bg'][0], image_params['bg'][1], output_image_shape[0]).astype(np.float32)
+        self.params['x'] = np.random.uniform(image_params['x'][0], image_params['x'][1], output_image_shape).astype(np.float32)
+        self.params['y'] = np.random.uniform(image_params['y'][0], image_params['y'][1], output_image_shape).astype(np.float32)
         
         if 'z' in image_params:
-            self.params['z'] = np.random.uniform(image_params['z'][0], image_params['z'][1], output_image_shape)
+            self.params['z'] = np.random.uniform(image_params['z'][0], image_params['z'][1], output_image_shape).astype(np.float32)
         else:
-            self.params['z'] = np.zeros(output_image_shape)
+            self.params['z'] = np.zeros(output_image_shape).astype(np.float32)
         
     def generate_images(self, size, length, shifts, image_params):
         raise NotImplementedError()
@@ -224,8 +224,8 @@ class Gaussian2DPSFDataset(SimulatedPSFDataset):
         ys = np.arange(0, size[1]) - 0.5*(size[1]-1)
         XS, YS = np.meshgrid(xs, ys, indexing='ij')
         
-        self.params['sig_x'] = np.random.uniform(*psf_params['sig_x'], length)
-        self.params['sig_y'] = np.random.uniform(*psf_params['sig_y'], length)
+        self.params['sig_x'] = np.random.uniform(*psf_params['sig_x'], length).astype(np.float32)
+        self.params['sig_y'] = np.random.uniform(*psf_params['sig_y'], length).astype(np.float32)
         ret = np.exp(-((XS[None,...]-shifts[:,0,None,None])**2/(2*self.params['sig_x'].reshape(-1,1,1)) \
                        + (YS[None,...]-shifts[:,1,None,None])**2/(2*self.params['sig_y'].reshape(-1,1,1))))
         ret -= ret.min(axis=(1,2), keepdims=True)

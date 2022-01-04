@@ -222,9 +222,20 @@ class FittingTrainer(object):
     def log_param_to_tensorboard(self, tb_logger, label, n_iter, y, pred, params=['x','y','z']):
         for param in params:
             if param in pred and param in y:
-                param_y = y[param].squeeze().detach().numpy()
-                param_pred = torch.as_tensor(pred[param]).squeeze().detach().numpy()
-                error = np.std(param_pred - param_y)
+                param_y = y[param].squeeze().detach()
+                param_pred = torch.as_tensor(pred[param]).squeeze().detach()
+                if param_y.ndim > 1 or param_pred.ndim > 1:
+                    # estimate of error based on nearest neighbour
+                    for i in range(3 - param_y.ndim):
+                        param_y = param_y.unsqueeze(-1)
+                    for i in range(3 - param_pred.ndim):
+                        param_pred = param_pred.unsqueeze(-1)
+                    pairwise_distances = torch.cdist(param_y, param_pred)
+                    sorted_values, indices = torch.sort(pairwise_distances, dim=1)
+                    error = sorted_values[:, :, 0]
+                    error = error.std()
+                else:
+                    error = torch.std(param_pred - param_y)
                 tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
     
     def save_checkpoint(self, filepath=None):

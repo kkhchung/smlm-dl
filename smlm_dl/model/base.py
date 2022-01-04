@@ -33,6 +33,33 @@ class ParameterModule(nn.Module):
         return self.parameter
 
 
+class FitParameter(object):
+    activation = None
+    offset = None
+    scaling = None
+    per_psf = None
+    
+    def __init__(self, activation, offset, scaling, default, per_psf):
+        self.activation = activation
+        self.offset = offset
+        self.scaling = scaling
+        self.default = default
+        self.per_psf = per_psf
+        
+    def copy(self):
+        return FitParameter(self.activation, self.offset, self.scaling, self.default, self.per_psf)
+    
+    def __repr__(self):
+        text = "<"
+        text += "act: {}, ".format(self.activation.__class__.__name__)
+        text += "offset: {}, ".format(self.offset)
+        text += "scaling: {}, ".format(self.scaling)
+        text += "default: {}, ".format(self.default)
+        text += "per psf: {}, ".format(self.per_psf)
+        text += ">"
+        return text
+
+
 def check_model(model, dataloader=None):
     is_training = model.training
     model.train(False)

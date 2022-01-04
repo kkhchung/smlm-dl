@@ -119,7 +119,7 @@ class FittingTrainer(object):
                 for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:
                     for key, val in new_dict.items():
                         if key in old_dict:
-                            if isinstance(val, torch.Tensor):
+                            if val.ndim > 0:
                                 old_dict[key] = torch.cat([old_dict[key], val])
                             else:
                                 old_dict[key] = val # should be identical to the old value

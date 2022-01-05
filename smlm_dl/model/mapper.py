@@ -8,22 +8,68 @@ from . import base, encoder, renderer
 
 class BaseMapperModel(base.BaseModel):
     
-    def __init__(self):
+    def __init__(self, img_size, fit_params, max_psf_count, params_ref, params_ref_no_scale):
         super().__init__()
+        
+        self.setup_params_ref(img_size, fit_params, max_psf_count, params_ref, params_ref_no_scale)
+        self.cached_images = dict()
+    
+    def setup_params_ref(self, img_size, fit_params, max_psf_count, params_ref, params_ref_no_scale):
+        if params_ref_no_scale is True:
+            params_ref = generate_params_ref_no_scale(params_ref)
+        
+        params_ref_sorted = self.generate_params_ref_sorted(params_ref, fit_params)
+        
+        self.params_ref = params_ref_sorted
+            
+    def generate_params_ref_no_scale(self, params_ref):
+        new_params_ref = dict()
+        for key, val in params_ref.items():
+            new_params_ref[key] = model.FitParameter(nn.Identity(), 0, 1,
+                                                     (val.default + val.offset) * val.scaling,
+                                                     val.per_psf)
+        return new_params_ref
+    
+    def generate_params_ref_sorted(self, params_ref, fit_params):
+        new_params_ref = dict()
+        for param in fit_params:
+            if not param in params_ref:
+                raise Exception("fit param ({}) not recognised for this model".format(param))
+            new_params_ref[param] = params_ref[param]
+        for key, val in params_ref.items():
+            if not key in new_params_ref:
+                new_params_ref[key] = val
+        return new_params_ref
+
     
     # def forward(self):
     #     super().forward()
+    
+    def get_suppl(self, colored=False):
+        ret = dict()
+        if len(self.cached_images) > 0:
+            images = {}
+            for key, val in self.cached_images.items():
+                images[key] = util.color_images(util.tile_images(val[:9], 3)[0], full_output=True)
+            ret['images'] = images
+        return ret
     
     
 class DirectMapperModel(BaseMapperModel):
     
     def __init__(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
-        super().__init__()
-        self.setup_fit_params(img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale)
-    
-    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
-        self.params_ref = dict()
-        self.params_ref.update({
+        
+        params_ref = self.generate_params_ref(new_params_ref, img_size)
+        
+        super().__init__(img_size=img_size, fit_params=fit_params,
+                         max_psf_count=max_psf_count, params_ref=params_ref,
+                         params_ref_no_scale=params_ref_no_scale)
+        
+        self.setup_fit_params(img_size, fit_params, max_psf_count,)
+        
+    def generate_params_ref(self, new_params_ref, img_size):
+        params_ref = dict()
+        params_ref.update({
             'x': model.FitParameter(nn.Tanh(), 0, 0.75 * img_size[0], 0, True),
             'y': model.FitParameter(nn.Tanh(), 0, 0.75 * img_size[1], 0, True),
             'z': model.FitParameter(nn.Tanh(), 0, 2 * np.pi, 0, True),
@@ -31,29 +77,18 @@ class DirectMapperModel(BaseMapperModel):
             'bg': model.FitParameter(nn.Tanh(), 0, 500, 0, False),
             'p': model.FitParameter(nn.Sigmoid(), 0, 1, 1, True)
         })
-        self.params_ref.update(new_params_ref)
-        
-        if params_ref_no_scale is True:
-            for key in self.params_ref:
-                self.params_ref[key] = FitParameter(nn.Identity(), 0, 1,
-                                                    (self.params_ref[key].default + self.params_ref[key].offset) * self.params_ref[key].scaling,
-                                                    self.params_ref[key].per_psf)
-
+        params_ref.update(new_params_ref)
+        return params_ref
+    
+    def setup_fit_params(self, img_size, fit_params, max_psf_count,):
         detailed_fit_params = dict()
-        params_ref_sorted = dict()
         n_fit_params = 0
         for param in fit_params:
-            if not param in self.params_ref:
-                raise Exception("fit param ({}) not recognised for this model".format(param))
             repeats = max_psf_count if self.params_ref[param].per_psf else 1
             detailed_fit_params[param] = list()
             for i in range(repeats):
                 detailed_fit_params[param].append(self.params_ref[param].copy())
                 n_fit_params += 1
-            params_ref_sorted[param] = self.params_ref.pop(param)
-        params_ref_sorted.update(self.params_ref)
-        self.params_ref.clear() 
-        self.params_ref.update(params_ref_sorted)
         self.fit_params = detailed_fit_params
         # print(self.fit_params)
         self.n_fit_params = n_fit_params
@@ -76,22 +111,26 @@ class DirectMapperModel(BaseMapperModel):
                 
                 i += repeats
                 
-        # print(mapped_params)
         return mapped_params
     
     
 class CentroidMapperModel(BaseMapperModel):
     
     def __init__(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
-        super().__init__()
-        self.setup_fit_params(img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale)
+        
+        params_ref = self.generate_params_ref(new_params_ref)
+        
+        super().__init__(img_size=img_size, fit_params=fit_params,
+                         max_psf_count=max_psf_count, params_ref=params_ref,
+                         params_ref_no_scale=params_ref_no_scale)
+        
+        self.setup_fit_params(img_size, fit_params, max_psf_count,)
         
         self._set_buffers(img_size)
-        self.cached_images = dict()
         
-    def setup_fit_params(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
-        self.params_ref = dict()
-        self.params_ref.update({
+    def generate_params_ref(self, new_params_ref):
+        params_ref = dict()
+        params_ref.update({
             'x': model.FitParameter(nn.Identity(), 0, 1, 0, True),
             'y': model.FitParameter(nn.Identity(), 0, 1, 0, True),
             # 'z': model.FitParameter(nn.Tanh(), 0, 2 * np.pi, 0, True),
@@ -99,29 +138,18 @@ class CentroidMapperModel(BaseMapperModel):
             'bg': model.FitParameter(nn.Identity(), 0, 1, 0, False),
             'p': model.FitParameter(nn.Sigmoid(), 0, 1, 1, True)
         })
-        self.params_ref.update(new_params_ref)
+        params_ref.update(new_params_ref)
+        return params_ref
         
-        if params_ref_no_scale is True:
-            for key in self.params_ref:
-                self.params_ref[key] = FitParameter(nn.Identity(), 0, 1,
-                                                    (self.params_ref[key].default + self.params_ref[key].offset) * self.params_ref[key].scaling,
-                                                    self.params_ref[key].per_psf)
-
+    def setup_fit_params(self, img_size, fit_params, max_psf_count,):
         detailed_fit_params = dict()
-        params_ref_sorted = dict()
         n_fit_params = 0
         for param in fit_params:
-            if not param in self.params_ref:
-                raise Exception("fit param ({}) not recognised for this model".format(param))
             repeats = max_psf_count if self.params_ref[param].per_psf else 1
             detailed_fit_params[param] = list()
             for i in range(repeats):
                 detailed_fit_params[param].append(self.params_ref[param].copy())
                 n_fit_params += 1
-            params_ref_sorted[param] = self.params_ref.pop(param)
-        params_ref_sorted.update(self.params_ref)
-        self.params_ref.clear() 
-        self.params_ref.update(params_ref_sorted)
         self.fit_params = detailed_fit_params
         self.n_fit_params = n_fit_params
         
@@ -171,15 +199,3 @@ class CentroidMapperModel(BaseMapperModel):
         mapped_params['x'] = params[:, :, 0]
         mapped_params['y'] = params[:, :, 1]
         return mapped_params
-    
-    def get_suppl(self, colored=False):
-        images = {}
-        for key, val in self.cached_images.items():
-            images['{}'.format(key)] = util.color_images(util.tile_images(val[:9], 3)[0], full_output=True)
-                
-        ret = super().get_suppl(colored=colored)
-        if not 'images' in ret:
-            ret['images'] = images
-        else:
-            ret['images'].update(images)
-        return ret

@@ -68,8 +68,15 @@ class BaseFitModel(base.BaseModel):
     
     def get_suppl(self, colored=False):
         ret = dict()
-        if hasattr(self.renderer, 'get_suppl'):
-            ret.update(self.renderer.get_suppl(colored=colored))
+        for key, val in {'E':self.encoder, 'M':self.mapper,
+                         'R':self.renderer, 'F':self.feedbacker}.items():
+            if hasattr(val, 'get_suppl'):
+                suppls = val.get_suppl(colored=colored)
+                for suppl_type_key, suppl_type_val in suppls.items():
+                    if not suppl_type_key in ret:
+                        ret[suppl_type_key] = dict()
+                    for suppl_key, suppl_val in suppl_type_val.items():
+                        ret[suppl_type_key]["{}:{}".format(key, suppl_key)] = suppl_val
         return ret
     
     @property

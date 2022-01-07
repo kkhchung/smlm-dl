@@ -26,7 +26,7 @@ class BaseFitModel(base.BaseModel):
             feedback = self.renderer.get_feedback()
             self.feedbacker = feedback_class(img_size, feedback.shape[-2:], **feedback_params)
             in_channels += feedback.shape[1]
-        if issubclass(encoder_class, encoder.ImageEncoderModel):
+        if encoder_class.image_input:
             encoder_params.update({"img_size":img_size, "in_channels":in_channels})
         self.encoder = encoder_class(last_out_channels=self.mapper.in_channels, **encoder_params)
         self.image_input = self.encoder.image_input

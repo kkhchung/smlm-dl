@@ -16,9 +16,10 @@ class BaseEncoderModel(base.BaseModel):
 
 
 class IdEncoderModel(BaseEncoderModel):
+    image_input = False
+    
     def __init__(self, num_img, last_out_channels=2, init_weights=None):
         super().__init__(last_out_channels=last_out_channels, **{"num_img":num_img, "init_weights":init_weights})
-        self.image_input = False
     
     def build_model(self, num_img, init_weights=None):
         self.one_hot = functools.partial(torch.nn.functional.one_hot, num_classes=num_img)
@@ -41,10 +42,11 @@ class IdEncoderModel(BaseEncoderModel):
     
     
 class ImageEncoderModel(BaseEncoderModel):
+    image_input = True
+    
     def __init__(self, img_size=(32,32), in_channels=1, last_out_channels=2, **kwargs):
         if not img_size is None and (img_size[0] % 2 != 0 or img_size[1] % 2 !=0):
             raise Exception("Image input size needs to be multiples of two.")
-        self.image_input = True
         self.img_size = img_size
         self.in_channels = in_channels
         super().__init__(last_out_channels=last_out_channels, **kwargs)

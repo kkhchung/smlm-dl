@@ -143,9 +143,11 @@ class CentroidMapperModel(BaseMapperModel):
     
     def setup_mappings(self, fit_params, max_psf_count):
         if any(param in fit_params for param in ['A', 'x', 'y']):
+            centroid_module = Centroid(self.img_size)
+            centroid_module.register_forward_hook(self.save_input_image)
             self.mappings.append((max_psf_count,
                                   nn.Sequential(nn.ReLU(),
-                                                Centroid(self.img_size)),
+                                                centroid_module),
                                   [['A', 'x', 'y'], [max_psf_count,]*3]))
             self.in_channels += max_psf_count
         for param_key, param_val in self.params_ref.items():
@@ -161,6 +163,10 @@ class CentroidMapperModel(BaseMapperModel):
             else:
                 self.mapped_params[param_key] = torch.as_tensor(param_val.default, dtype=torch.float32)
             self.in_channels += repeats
+            
+    def save_input_image(self, module, input, output):
+        self.cached_images["preCentroid"] = input[0][0,:9,...].detach()
+            
 
 
 class StackedConvMapper(BaseMapperModel):

@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 
-import util, zernike
+import simulate, spline, util, zernike
 from . import base
 
 
@@ -303,3 +303,136 @@ class FourierOptics2DRenderer(BaseRendererModel):
         return {'images':{'pupil mag':pupil_magnitude, 'pupil phase':pupil_phase, 'z propagate':pupil_prop},
                 'plots':{'zernike': {'plot':zern_plot, 'kwargs':{'figsize':(8,3)}}},
                }
+    
+    
+class Spline2DRenderer(BaseRendererModel):
+    
+    def __init__(self, img_size, fit_params, k=3, template_init=None):
+        super().__init__(img_size, fit_params)
+        
+        self.k = k
+        self.out_size = img_size
+        if template_init is None:
+            template_init = simulate.simulate_centered_gaussian(img_size[0], img_size[1])
+            # noise = torch.empty(template_init.shape)
+            # nn.init.xavier_uniform_(noise, 0.1)
+            # template_init = template_init + noise
+        
+        coeffs = torch.tensor(template_init, dtype=torch.float)
+        self.template_size = coeffs.shape
+        
+        self.padding = 4
+        coeffs = torch.nn.functional.pad(coeffs, (self.padding,)*4)
+        self.coeffs = nn.Parameter(coeffs)
+        self.offset = self.padding - (k+1)//2
+        self.centering_offset = [(self.out_size[0] - self.template_size[0])//2,
+                                 (self.out_size[1] - self.template_size[1])//2,]
+        if (any(val<0 for val in self.centering_offset)):
+            raise Exception("Out_size must be larger than size of image. Limitation of using torch.scatter.")
+            
+        index_a = torch.arange(self.template_size[1]+1).tile(self.template_size[0]+1, 1)
+        index_b = torch.arange(self.out_size[0]+2)[:,None].tile(1, self.out_size[1]+2)
+        self.register_buffer('index_a', index_a)
+        self.register_buffer('index_b', index_b)
+        
+        if not template_init is None:
+            self.fit_image(template_init)
+        
+    def _render_images(self, mapped_params, batch_size=None, raw=False):
+        shift_pixel = {key: torch.floor(mapped_params[key]/1).type(torch.int) for key in ['x', 'y']}
+        shifts_subpixel = {key: torch.remainder(mapped_params[key], 1) for key in ['x', 'y']}
+        
+        template = self._calculate_template(shifts_subpixel)
+        if raw:
+            return template
+        
+        x_a = torch.zeros((batch_size, 1, self.out_size[0]+2, self.out_size[1]+2))
+        
+        index = self.index_a.tile(batch_size, 1, 1, 1) + shift_pixel['y'] + self.centering_offset[1] + 1
+        index = torch.clamp(index, 0, x_a.shape[3]-1)
+        x_a.scatter_(3, index, template)
+        
+        x_b = torch.zeros_like(x_a)
+        
+        index = self.index_b.tile(batch_size, 1, 1, 1) + shift_pixel['x'] + self.centering_offset[0] + 1
+        index = torch.clamp(index, 0, x_b.shape[2]-1)
+        x_b.scatter_(2, index, x_a)
+        
+        x = x_b[:,:,1:-1,1:-1]
+        
+        x = x * mapped_params['A'] + mapped_params['bg']
+        
+        return x
+    
+    def _calculate_template(self, shifts_subpixel):
+        bases = {key: spline.calculate_bspline_basis(val, self.k) for key, val in shifts_subpixel.items()}
+        x = 0
+        for i, cx in enumerate(bases['x']):
+            for j, cy in enumerate(bases['y']):
+                coeffs = self.coeffs[i+self.offset:i+self.offset+self.template_size[0]+1,
+                                     j+self.offset:j+self.offset+self.template_size[1]+1]
+                x = x + cx * cy * coeffs
+        return x
+    
+    def render(self, scale=1):
+        x = torch.arange(0, 1, 1/scale)
+        y = torch.arange(0, 1, 1/scale)
+        xs, ys = torch.meshgrid(x, y, indexing='ij')
+
+        x = {'x': xs.flatten()[:,None,None,None],
+             'y': ys.flatten()[:,None,None,None],}
+        
+        interpolated_images = self._calculate_template(x)
+        image_highres = np.empty(((self.template_size[0]+1)*scale, (self.template_size[1]+1)*scale))
+        
+        for i, img in enumerate(interpolated_images):
+            c = i // scale
+            r = i % scale
+            image_highres[scale-c-1::scale, scale-r-1::scale] = interpolated_images[i,0].detach()
+        
+        image_highres = image_highres[scale//2:-((scale+1)//2), scale//2:-((scale+1)//2)]
+        return image_highres
+    
+    def get_suppl(self, colored=False):
+        res = {'images': {},
+               }
+        template = self.render(1)
+        template_2x = self.render(2)
+        if colored:
+            template = util.color_images(template, full_output=True)
+            template_2x = util.color_images(template_2x, full_output=True)
+        res['images'].update({'template':template, 'template 2x':template_2x, })
+
+        return res
+    
+    def fit_image(self, image_groundtruth, maxiter=200, tol=1e-9):
+        image_groundtruth = torch.as_tensor(image_groundtruth).type(torch.float32)
+        image_groundtruth = nn.functional.pad(image_groundtruth, (0,1,0,1))
+        loss_function = nn.MSELoss()
+        optimizer = torch.optim.Adam(self.parameters(), lr=10)
+        
+        x = {'x':torch.zeros((1,1,1,1)),
+             'y':torch.zeros((1,1,1,1))}
+        
+        mask = torch.ones(self.coeffs.shape, dtype=torch.bool)
+        mask[self.padding:-self.padding,self.padding:-self.padding] = False
+        
+        print("Fitting...")
+        loss_log = list()
+        for i in range(maxiter):
+            optimizer.zero_grad()
+            pred = self._render_images(x, raw=True)
+            loss = loss_function(pred[0,0,:,:], image_groundtruth)
+            loss_log.append(loss.detach().numpy())
+            
+            if (loss < tol):
+                print("Early termination after {} iterations, loss tol < {} reached".format(i, tol))
+                break
+                
+            loss.backward()
+            optimizer.step()
+            self.coeffs.data.masked_fill_(mask, 0)
+            
+        # plot(loss_log)
+        print("Final loss: {}".format(loss_log[-1]))
+        return loss_log

@@ -15,3 +15,11 @@ def simulate_image_gauss2d(width, height, num=1, sig=2, full_output=False):
         return image, (x, y)
     else:
         return image
+    
+def simulate_centered_gaussian(width, height, sig=0.1):
+    xs = np.linspace(-1, 1, width)
+    ys = np.linspace(-1, 1, height)
+    xs, ys = np.meshgrid(xs, ys, indexing='ij')
+    image = np.exp(-0.5*(xs**2/sig**2+ ys**2/sig**2))
+    
+    return image

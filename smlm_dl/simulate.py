@@ -16,10 +16,18 @@ def simulate_image_gauss2d(width, height, num=1, sig=2, full_output=False):
     else:
         return image
     
-def simulate_centered_gaussian(width, height, sig=0.1):
-    xs = np.linspace(-1, 1, width)
-    ys = np.linspace(-1, 1, height)
-    xs, ys = np.meshgrid(xs, ys, indexing='ij')
-    image = np.exp(-0.5*(xs**2/sig**2+ ys**2/sig**2))
+def simulate_centered_2d_gaussian(width, height, sig=2):
+    image = simulate_centered_3d_gaussian(width, height, 1, sig)[:,:,0]
     
     return image
+
+def simulate_centered_3d_gaussian(width, height, depth, sig_xy=2, sig_z=6):
+    sig_x = sig_xy
+    sig_y = sig_xy
+    xs = np.linspace(-1, 1, width) * width * 0.5
+    ys = np.linspace(-1, 1, height) * height * 0.5
+    zs = np.linspace(-1, 1, depth) * depth * 0.5
+    xs, ys, zs = np.meshgrid(xs, ys, zs, indexing='ij')
+    volume = np.exp(-(0.5*xs**2/sig_x**2 + 0.5*ys**2/sig_y**2 + 0.5*zs**2/sig_z**2))
+    
+    return volume

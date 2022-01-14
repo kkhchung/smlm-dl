@@ -346,16 +346,22 @@ class Spline2DRenderer(BaseRendererModel):
         if raw:
             return template
         
-        x_a = torch.zeros((batch_size, 1, self.out_size[0]+2, self.out_size[1]+2))
+        x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2))
         
-        index = self.index_a.tile(batch_size, 1, 1, 1) + shift_pixel['y'] + self.centering_offset[1] + 1
+        index = self.index_a.tile(shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], 1, 1) \
+                + shift_pixel['y'] \
+                + self.centering_offset[1] + 1
         index = torch.clamp(index, 0, x_a.shape[3]-1)
+        # print(x_a.shape, index.shape, template.shape)
         x_a.scatter_(3, index, template)
         
         x_b = torch.zeros_like(x_a)
         
-        index = self.index_b.tile(batch_size, 1, 1, 1) + shift_pixel['x'] + self.centering_offset[0] + 1
+        index = self.index_b.tile(shift_pixel['x'].shape[0], shift_pixel['x'].shape[1], 1, 1) \
+                + shift_pixel['x'] \
+                + self.centering_offset[0] + 1
         index = torch.clamp(index, 0, x_b.shape[2]-1)
+        # print(x_b.shape, index.shape, template.shape)
         x_b.scatter_(2, index, x_a)
         
         x = x_b[:,:,1:-1,1:-1]

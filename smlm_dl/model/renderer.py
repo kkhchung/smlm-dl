@@ -313,7 +313,7 @@ class Spline2DRenderer(BaseRendererModel):
         self.k = k
         self.out_size = img_size
         if template_init is None:
-            template_init = simulate.simulate_centered_gaussian(img_size[0], img_size[1])
+            template_init = simulate.simulate_centered_2d_gaussian(img_size[0], img_size[1])
             # noise = torch.empty(template_init.shape)
             # nn.init.xavier_uniform_(noise, 0.1)
             # template_init = template_init + noise

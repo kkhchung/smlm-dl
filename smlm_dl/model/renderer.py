@@ -3,6 +3,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from tqdm.auto import tqdm, trange
+
 import simulate, spline, util, zernike
 from . import base
 
@@ -439,6 +441,169 @@ class Spline2DRenderer(BaseRendererModel):
             optimizer.step()
             self.coeffs.data.masked_fill_(mask, 0)
             
-        # plot(loss_log)
-        print("Final loss: {}".format(loss_log[-1]))
+        r2 = 1 - loss_log[-1] / image_groundtruth.var()
+        print("Final loss: {:.3f}\tR2: {:.3f}".format(loss_log[-1], r2))
+        if loss_log[-1] > 1 and r2 < 0.9:
+            print("Not well fitted.")
         return loss_log
+    
+    
+class Spline3DRenderer(BaseRendererModel):
+    
+    def __init__(self, img_size, fit_params, k=3, template_init=None):
+        super().__init__(img_size, fit_params)
+        
+        self.k = k
+        self.out_size = img_size
+        if template_init is None:
+            template_init = simulate.simulate_centered_3d_gaussian(img_size[0], img_size[1], 64)
+            # noise = torch.empty(template_init.shape)
+            # nn.init.xavier_uniform_(noise, 0.1)
+            # template_init = template_init + noise
+        
+        coeffs = torch.tensor(template_init, dtype=torch.float)
+        self.template_size = coeffs.shape
+        
+        self.padding = 4
+        coeffs = torch.nn.functional.pad(coeffs, (self.padding,)*6)
+        self.coeffs = nn.Parameter(coeffs)
+        self.offset = self.padding - (k+1)//2
+        self.centering_offset = [(self.out_size[0] - self.template_size[0])//2,
+                                 (self.out_size[1] - self.template_size[1])//2,
+                                 self.template_size[2]//2,
+                                ]
+        if (any(val<0 for val in self.centering_offset)):
+            raise Exception("Out_size must be larger than size of image. Limitation of using torch.scatter.")
+            
+        index_a = torch.arange(self.template_size[1]+1).tile(self.template_size[0]+1, 1)
+        index_b = torch.arange(self.out_size[0]+2)[:,None].tile(1, self.out_size[1]+2)
+        self.register_buffer('index_a', index_a)
+        self.register_buffer('index_b', index_b)
+        
+        if not template_init is None:
+            self.spline_fit_loss_log = self.fit_image(template_init)
+        
+    def _render_images(self, mapped_params, batch_size=None, raw=False):
+        shift_pixel = {key: torch.floor(mapped_params[key]/1).type(torch.int) for key in ['x', 'y', 'z']}
+        shifts_subpixel = {key: torch.remainder(mapped_params[key], 1) for key in ['x', 'y', 'z']}
+        
+        template = self._calculate_template(shifts_subpixel, shift_pixel['z']+self.centering_offset[2])
+        if raw:
+            return template
+        
+        x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2))
+        
+        index = self.index_a.tile(shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], 1, 1) \
+                + shift_pixel['y'] \
+                + self.centering_offset[1] + 1
+        index = torch.clamp(index, 0, x_a.shape[3]-1)
+        x_a.scatter_(3, index, template)
+        
+        x_b = torch.zeros_like(x_a)
+        
+        index = self.index_b.tile(shift_pixel['x'].shape[0], shift_pixel['x'].shape[1], 1, 1) \
+                + shift_pixel['x'] \
+                + self.centering_offset[0] + 1
+        index = torch.clamp(index, 0, x_b.shape[2]-1)
+        x_b.scatter_(2, index, x_a)
+        
+        x = x_b[:,:,1:-1,1:-1]
+        
+        x = x * mapped_params['A'] + mapped_params['bg']
+        
+        return x
+    
+    def _calculate_template(self, shifts_subpixel, shift_pixel_z):
+        index = torch.arange(4).tile(*shift_pixel_z.shape[:2], *self.coeffs.shape[:2], 1) + self.offset + shift_pixel_z.unsqueeze(-1) - 1
+        index = torch.clamp(index, 0, self.coeffs.shape[2]-1)
+
+        coeffs = self.coeffs.tile(*shift_pixel_z.shape[:2], 1, 1, 1)
+        coeffs = torch.gather(coeffs, 4, index)
+        
+        bases = {key: spline.calculate_bspline_basis(val, self.k) for key, val in shifts_subpixel.items()}
+        x = 0
+        for i, cx in enumerate(bases['x']):
+            for j, cy in enumerate(bases['y']):
+                for k, cz in enumerate(bases['z']):
+                    coeffs_tmp = coeffs[:,:,
+                                        i+self.offset:i+self.offset+self.template_size[0]+1,
+                                        j+self.offset:j+self.offset+self.template_size[1]+1,
+                                        k]
+                    x = x + cx * cy * cz * coeffs_tmp
+        return x
+    
+    def render(self, scale=1):
+        x = torch.arange(0, 1, 1/scale)
+        y = torch.arange(0, 1, 1/scale)
+        z = torch.arange(0, self.template_size[2], 1/scale) - self.centering_offset[2]
+        
+        xs, ys, zs = torch.meshgrid(x, y, z, indexing='ij')
+
+        x = {'x': xs.reshape(-1,1,1,1),
+             'y': ys.reshape(-1,1,1,1),
+             'z': zs.reshape(-1,1,1,1),}
+        
+        interpolated_images = self._render_images(x, raw=True)
+        interpolated_images = interpolated_images.reshape(scale, scale, scale*self.template_size[2], self.template_size[0]+1, self.template_size[1]+1,)
+        interpolated_images = interpolated_images.moveaxis((3, 4), (0,2))
+        interpolated_images = interpolated_images.reshape((self.template_size[0]+1)*scale,
+                                                         (self.template_size[1]+1)*scale,
+                                                         self.template_size[2]*scale)
+        interpolated_images = interpolated_images[scale//2:-((scale+1)//2), scale//2:-((scale+1)//2), :]
+
+        return interpolated_images
+    
+    def get_suppl(self, colored=False):
+        res = {'images': {},
+               }
+        template = self.render(1)
+        template_2x = self.render(2)
+        if colored:
+            template = util.color_images(template, full_output=True)
+            template_2x = util.color_images(template_2x, full_output=True)
+        res['images'].update({'template':template, 'template 2x':template_2x, })
+
+        return res
+    
+    def fit_image(self, volume_groundtruth, maxiter=10, tol=1e-9):
+        volume_groundtruth = torch.as_tensor(volume_groundtruth).type(torch.float32)
+        volume_groundtruth = nn.functional.pad(volume_groundtruth, (0,0,0,1,0,1))
+        
+        loss_function = nn.MSELoss()
+        optimizer = torch.optim.Adam(self.parameters(), lr=1e3, amsgrad=False)
+        
+        x = {'x':torch.zeros((1,1,1,1)),
+             'y':torch.zeros((1,1,1,1)),
+             'z':torch.arange(volume_groundtruth.shape[2]).reshape(-1,1,1,1) - self.centering_offset[2],
+            }
+        
+        mask = torch.ones(self.coeffs.shape, dtype=torch.bool)
+        mask[self.padding:-self.padding,self.padding:-self.padding] = False
+
+        loss_log = list()
+        _t = tqdm(total=maxiter)
+        _t.set_description("Fitting spline ...")
+        for i in range(maxiter):
+            optimizer.zero_grad()
+            pred = self._render_images(x, raw=True)
+            pred = pred.mean(axis=1)
+            pred = pred.moveaxis(0, -1)
+            loss = loss_function(pred, volume_groundtruth)
+            loss_log.append(loss.detach().numpy())
+            _t.set_postfix(loss=loss.detach().numpy())
+            _t.update(1)
+            
+            if (loss < tol):
+                print("Early termination after {} iterations, loss tol < {} reached".format(i, tol))
+                break
+                
+            loss.backward()
+            optimizer.step()
+            self.coeffs.data.masked_fill_(mask, 0)
+            
+        r2 = 1 - loss_log[-1] / volume_groundtruth.var()
+        print("Final loss: {:.3f}\tR2: {:.3f}".format(loss_log[-1], r2))
+        if loss_log[-1] > 1 and r2 < 0.9:
+            print("Not well fitted.")
+        return loss_log
+    

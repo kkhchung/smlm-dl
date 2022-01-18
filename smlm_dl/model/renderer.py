@@ -350,7 +350,7 @@ class Spline2DRenderer(BaseRendererModel):
         
         x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2))
         
-        index = self.index_a.tile(shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], 1, 1) \
+        index = self.index_a.unsqueeze(0).unsqueeze(0) \
                 + shift_pixel['y'] \
                 + self.centering_offset[1] + 1
         index = torch.clamp(index, 0, x_a.shape[3]-1)
@@ -359,7 +359,7 @@ class Spline2DRenderer(BaseRendererModel):
         
         x_b = torch.zeros_like(x_a)
         
-        index = self.index_b.tile(shift_pixel['x'].shape[0], shift_pixel['x'].shape[1], 1, 1) \
+        index = self.index_b.unsqueeze(0).unsqueeze(0) \
                 + shift_pixel['x'] \
                 + self.centering_offset[0] + 1
         index = torch.clamp(index, 0, x_b.shape[2]-1)
@@ -493,7 +493,7 @@ class Spline3DRenderer(BaseRendererModel):
         
         x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2))
         
-        index = self.index_a.tile(shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], 1, 1) \
+        index = self.index_a.unsqueeze(0).unsqueeze(0) \
                 + shift_pixel['y'] \
                 + self.centering_offset[1] + 1
         index = torch.clamp(index, 0, x_a.shape[3]-1)
@@ -501,7 +501,7 @@ class Spline3DRenderer(BaseRendererModel):
         
         x_b = torch.zeros_like(x_a)
         
-        index = self.index_b.tile(shift_pixel['x'].shape[0], shift_pixel['x'].shape[1], 1, 1) \
+        index = self.index_b.unsqueeze(0).unsqueeze(0) \
                 + shift_pixel['x'] \
                 + self.centering_offset[0] + 1
         index = torch.clamp(index, 0, x_b.shape[2]-1)

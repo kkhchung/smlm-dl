@@ -22,8 +22,9 @@ class ImageDataset(Dataset):
                  image_params={},
                  noise_params={'poisson':True, 'gaussian':10},
                  conv_kernel=None,
-                 normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]},):
-        Dataset.__init__(self)
+                 normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]},
+                 image_params_preset={}):
+        super().__init__()
         
         for key in augmentations:
             if not isinstance(key, Augmentation):
@@ -32,25 +33,25 @@ class ImageDataset(Dataset):
         self.augmentations = augmentations
         self.padding = augmentations.get(Augmentation.PIXEL_SHIFT, [0,0]) # x, y
         self.gen_size = (out_size[0]+2*self.padding[0], out_size[1]+2*self.padding[1])
-        self.out_size = out_size        
+        self.out_size = out_size
         
         output_image_shape = np.atleast_1d(np.asarray(length))
         if output_image_shape.shape[0]<2:
             output_image_shape = np.concatenate([output_image_shape, [1]])
         
-        self.set_params(output_image_shape, image_params)
+        self.set_params(output_image_shape, image_params, image_params_preset)
             
         shifts = np.stack([self.params['x'].flatten(), self.params['y'].flatten(), self.params['z'].flatten()], axis=-1)
             
         images = self.generate_images(self.gen_size, output_image_shape, shifts, image_params)
         
         if dropout_p > 0:
-            images = images * (np.random.rand(images.shape[0], 1, 1) > dropout_p)        
+            images = images * (np.random.rand(images.shape[0], 1, 1) > dropout_p)
         
         images = images * self.params['A'].reshape(-1, 1, 1)
         
         images = images.reshape(output_image_shape[0], output_image_shape[1], images.shape[1], images.shape[2])
-        images = images.sum(axis=1, keepdims=True)        
+        images = images.sum(axis=1, keepdims=True)
         
         images = images + self.params['bg'].reshape(-1, 1, 1, 1)
         
@@ -69,7 +70,7 @@ class ImageDataset(Dataset):
             
         self.images = images.astype(np.float32)
         
-    def set_params(self, output_image_shape, image_params):
+    def set_params(self, output_image_shape, image_params, image_params_preset):
         # print("Image parameters settings: {}".format(image_params))
         self.params = {}
         self.params['id'] = np.arange(output_image_shape[0])
@@ -82,6 +83,8 @@ class ImageDataset(Dataset):
             self.params['z'] = np.random.uniform(image_params['z'][0], image_params['z'][1], output_image_shape).astype(np.float32)
         else:
             self.params['z'] = np.zeros(output_image_shape).astype(np.float32)
+            
+        self.params.update(image_params_preset)
         
     def generate_images(self, size, length, shifts, image_params):
         raise NotImplementedError()
@@ -122,7 +125,8 @@ class SingleImageDataset(ImageDataset):
                  image_params={},
                  noise_params={'poisson':True, 'gaussian':10},
                  conv_kernel = None,
-                 normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]}):
+                 normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]},
+                 image_params_preset={}):
         
         default_image_params = {
             'A': [0.5, 2.0],
@@ -135,11 +139,12 @@ class SingleImageDataset(ImageDataset):
         _image_params = dict(default_image_params, **image_params)
         _image_params['data'] = data
         
-        ImageDataset.__init__(self, out_size=out_size, length=length, dropout_p=dropout_p,
-                              image_params=_image_params,
-                              noise_params=noise_params,
-                              conv_kernel=conv_kernel,
-                              normalize=normalize, augmentations=augmentations)
+        super().__init__(out_size=out_size, length=length, dropout_p=dropout_p,
+                         image_params=_image_params,
+                         noise_params=noise_params,
+                         conv_kernel=conv_kernel,
+                         normalize=normalize, augmentations=augmentations,
+                         image_params_preset=image_params_preset)
         
     def generate_images(self, size, length, shifts, image_params):
         data = image_params['data']
@@ -171,7 +176,7 @@ class SingleImageDataset(ImageDataset):
         shifted_fft = fft_image_mag * np.exp(1j * fft_image_phase)
         shifted_img = np.fft.ifft2(np.fft.ifftshift(shifted_fft))
         
-        crop = np.concatenate([shift_max[i] + padding[i] for i in range(len(data.shape))])        
+        crop = np.concatenate([shift_max[i] + padding[i] for i in range(len(data.shape))])
         shifted_img = shifted_img[:, crop[0]:-crop[1], crop[2]:-crop[3]]
         
         return np.abs(shifted_img)
@@ -181,7 +186,8 @@ class SimulatedPSFDataset(ImageDataset):
     def __init__(self, out_size=(32, 32), length=512, dropout_p=0,
                  image_params={},
                  noise_params={'poisson':True, 'gaussian':10},
-                 normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]}):
+                 normalize=True, augmentations={Augmentation.PIXEL_SHIFT:[8,8]},
+                 image_params_preset={}):
         
         default_image_params = {
             'A': [500, 2000],
@@ -192,20 +198,22 @@ class SimulatedPSFDataset(ImageDataset):
         
         _image_params = dict(default_image_params, **image_params)
         
-        ImageDataset.__init__(self, out_size=out_size, length=length, dropout_p=dropout_p,
-                              image_params=_image_params,
-                              noise_params=noise_params,
-                              normalize=normalize, augmentations=augmentations)
+        super().__init__(out_size=out_size, length=length, dropout_p=dropout_p,
+                         image_params=_image_params,
+                         noise_params=noise_params,
+                         normalize=normalize, augmentations=augmentations,
+                         image_params_preset=image_params_preset)
         
     def generate_images(self, size, length, shifts, image_params):
         raise NotImplementedError()
 
 
 class Gaussian2DPSFDataset(SimulatedPSFDataset):
-    def __init__(self, out_size=(32, 32), length=512, dropout_p=0,                 
+    def __init__(self, out_size=(32, 32), length=512, dropout_p=0,
                  psf_params={},
                  noise_params={'poisson':True, 'gaussian':100},
-                 normalize=False, augmentations={}):
+                 normalize=False, augmentations={},
+                 image_params_preset={}):
         
         default_image_params = {
             'sig_x':[5, 5],
@@ -214,10 +222,11 @@ class Gaussian2DPSFDataset(SimulatedPSFDataset):
         
         _image_params = dict(default_image_params, **psf_params)
 
-        SimulatedPSFDataset.__init__(self, out_size=out_size, length=length, dropout_p=dropout_p,
-                                     image_params=_image_params,
-                                     noise_params=noise_params,
-                                     normalize=normalize, augmentations=augmentations)
+        super().__init__(out_size=out_size, length=length, dropout_p=dropout_p,
+                         image_params=_image_params,
+                         noise_params=noise_params,
+                         normalize=normalize, augmentations=augmentations,
+                         image_params_preset=image_params_preset)
         
     def generate_images(self, size, length, shifts, psf_params):
         xs = np.arange(0, size[0]) - 0.5*(size[0]-1)
@@ -237,21 +246,22 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
     def __init__(self, out_size=(32, 32), length=512, dropout_p=0,
                  psf_params={}, psf_zerns={},
                  noise_params={'poisson':True, 'gaussian':100},
-                 normalize=False, augmentations={}):
+                 normalize=False, augmentations={},
+                 image_params_preset={}):
         
         default_psf_params = {
             'apod':False,
             'pupil_scale':0.75,
         }
         
-        _psf_params = dict(default_psf_params, **psf_params)        
+        _psf_params = dict(default_psf_params, **psf_params)
         _psf_params["psf_zerns"] = psf_zerns
         
-        SimulatedPSFDataset.__init__(self, out_size=out_size, length=length, dropout_p=dropout_p,
-                                     image_params=_psf_params,
-                                     noise_params=noise_params,
-                                     normalize=normalize, augmentations=augmentations)
-        
+        super().__init__(out_size=out_size, length=length, dropout_p=dropout_p,
+                         image_params=_psf_params,
+                         noise_params=noise_params,
+                         normalize=normalize, augmentations=augmentations,
+                         image_params_preset=image_params_preset)
         
     def generate_images(self, size, length, shifts, psf_params):
         pupil_padding_factor = 4
@@ -272,7 +282,7 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
             pupil_mag = (R <= 1).astype(np.float)
         pupil_phase = zernike.calculate_pupil_phase(R*(R<=1), np.arctan2(US, VS), psf_params.get("psf_zerns", {}))
         
-        self.pupil = pupil_mag * np.exp(1j*pupil_phase)        
+        self.pupil = pupil_mag * np.exp(1j*pupil_phase)
         self.pupil = self.pupil[pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]]
         self.pupil_suppl = {"radial_distance": (R*(R<=1))[pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]],
                            "azimuthal_angle": np.arctan2(US, VS)[pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]]}
@@ -306,7 +316,7 @@ def inspect_images(dataset, indices=None):
     
     tiled_images, n_col, n_row  = util.tile_images(np.stack(images))
     
-    fig, axes = plt.subplots(2, 1, figsize=(4*n_col, 3*n_row*2))    
+    fig, axes = plt.subplots(2, 1, figsize=(4*n_col, 3*n_row*2))
     im = axes[0].imshow(tiled_images)
     plt.colorbar(im, ax=axes[0])
     im = axes[1].imshow(np.log(tiled_images))
@@ -330,7 +340,7 @@ def inspect_images(dataset, indices=None):
                          transform=axes[j].transAxes)
             
     fig, axes = plt.subplots(1, len(dataset.params), figsize=(4*len(dataset.params), 3))
-    for i, (key, val) in enumerate(dataset.params.items()):        
+    for i, (key, val) in enumerate(dataset.params.items()):
         axes[i].hist(val.flatten(), bins=20)
         axes[i].set_xlabel(key)
     

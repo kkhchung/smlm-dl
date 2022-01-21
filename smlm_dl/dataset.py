@@ -237,8 +237,7 @@ class Gaussian2DPSFDataset(SimulatedPSFDataset):
         self.params['sig_y'] = np.random.uniform(*psf_params['sig_y'], length).astype(np.float32)
         ret = np.exp(-((XS[None,...]-shifts[:,0,None,None])**2/(2*self.params['sig_x'].reshape(-1,1,1)) \
                        + (YS[None,...]-shifts[:,1,None,None])**2/(2*self.params['sig_y'].reshape(-1,1,1))))
-        ret -= ret.min(axis=(1,2), keepdims=True)
-        ret /= ret.max(axis=(1,2), keepdims=True)
+        
         return ret
     
     
@@ -298,9 +297,12 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         psfs = psfs[:, pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]]
         psfs = np.abs(psfs)**2
         
-        psfs -= psfs.min(axis=(1,2), keepdims=True)
-        psfs /= psfs.max(axis=(1,2), keepdims=True)
-
+        ref_psf = np.fft.ifftshift(np.fft.ifft2(np.fft.fftshift(np.pad(self.pupil, ((pupil_padding[0], -pupil_padding[1]), (pupil_padding[2], -pupil_padding[3]))))))
+        ref_psf = ref_psf[pupil_padding[0]:pupil_padding[1], pupil_padding[2]:pupil_padding[3]]
+        ref_psf = np.abs(ref_psf)**2
+        
+        psfs /= ref_psf.max()
+        
         return psfs
 
 

@@ -76,7 +76,7 @@ def check_model(model, dataloader=None):
         
         n_col = 8
         n_images = 8
-        features_tiled, n_col, n_row = util.tile_images(features[:n_images].mean(1), n_col)
+        features_tiled, n_col, n_row = util.tile_images(features[:n_images].mean(1), n_col, full_output=True)
         
         fig, axes = plt.subplots(3 if pred_is_image else 1, 1,
                                  figsize=(4*n_col, 3*n_row*(3 if pred_is_image else 1)),
@@ -86,7 +86,7 @@ def check_model(model, dataloader=None):
         axes[0,0].set_title("data")
         
         if pred_is_image:
-            pred_tiled, n_col, n_row = util.tile_images(pred[:n_images].mean(1), n_col)
+            pred_tiled, n_col, n_row = util.tile_images(pred[:n_images].mean(1), n_col, full_output=True)
             im = axes[1,0].imshow(pred_tiled)
             plt.colorbar(im, ax=axes[1,0])
             axes[1,0].set_title("predicted")

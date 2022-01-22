@@ -54,7 +54,7 @@ class FittingTrainer(object):
             self.device = torch.device('cpu')
         print("Device: {}".format(self.device))
         
-    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=16, t=None):
+    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=9, t=None):
         self.model.to(self.device)
         self.model.train()
         
@@ -89,8 +89,8 @@ class FittingTrainer(object):
 
                 if not tb_logger is None:
                     n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
-                    self.log_to_tensorboard(tb_logger, "Training", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])                    
-                    self.log_param_to_tensorboard(tb_logger, "Training", n_iter, y, self.model.mapped_params)
+                    self.log_images_to_tensorboard(tb_logger, "Training", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
+                    self.log_params_to_tensorboard(tb_logger, "Training", n_iter, y, self.model.mapped_params)
                     
             _t.set_postfix(train_loss=loss.detach().numpy())
         
@@ -102,7 +102,7 @@ class FittingTrainer(object):
         self.current_state['epoch'] = epoch_i
         self.current_state['loss'] = loss
                 
-    def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=16, show_images=True):
+    def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=9, show_images=True):
         self.model.to(self.device)
         self.model.eval()
         
@@ -133,12 +133,13 @@ class FittingTrainer(object):
         # print("*"*100)
         
         if not tb_logger is None:
-            self.log_to_tensorboard(tb_logger, "Validate", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
-            self.log_param_to_tensorboard(tb_logger, "Validate", n_iter, y_params, pred_params)
+            self.log_images_to_tensorboard(tb_logger, "Validate", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
+            self.log_params_to_tensorboard(tb_logger, "Validate", n_iter, y_params, pred_params)
         
         if show_images:
-            x_numpy = x[:tb_log_limit_images].detach().numpy().mean(axis=1)
-            pred_numpy = pred[:tb_log_limit_images].detach().numpy().mean(axis=1)
+            img_limit = 16
+            x_numpy = x[:img_limit].detach().numpy().mean(axis=1, keepdims=True)
+            pred_numpy = pred[:img_limit].detach().numpy().mean(axis=1, keepdims=True)
             vmin = min(x_numpy.min(), pred_numpy.min())
             vmax = max(x_numpy.max(), pred_numpy.max())
             
@@ -146,13 +147,13 @@ class FittingTrainer(object):
             diff_vmax = max(-diff.min(), diff.max())
             diff_vmin = -diff_vmax
             
-            n_col = min(8, tb_log_limit_images)
+            n_col = min(8, img_limit)
             n_row = 0
-            x_numpy_tiled, _n_col, _n_row = util.tile_images(x_numpy, n_col=n_col)
+            x_numpy_tiled, _n_col, _n_row = util.tile_images(x_numpy, n_col=n_col, full_output=True)
             n_row += _n_row
-            pred_numpy_tiled, _n_col, _n_row = util.tile_images(pred_numpy, n_col=n_col)
+            pred_numpy_tiled, _n_col, _n_row = util.tile_images(pred_numpy, n_col=n_col, full_output=True)
             n_row += _n_row
-            diff_tiled, _n_col, _n_row = util.tile_images(pred_numpy, n_col=n_col)
+            diff_tiled, _n_col, _n_row = util.tile_images(diff, n_col=n_col, full_output=True)
             n_row += _n_row
             
             fig, axes = plt.subplots(3, 1, figsize=(n_col*4, n_row*3))
@@ -161,6 +162,7 @@ class FittingTrainer(object):
                                                          'diff': (diff_tiled, diff_vmin, diff_vmax, True),
                                                          }.items()):
                 colored_img, norm, cmap = util.color_images(img, vmin=vmin, vmax=vmax, vsym=vsym, full_output=True)
+                colored_img = np.moveaxis(colored_img[0], 0, -1)
                 axes[i].imshow(colored_img)
                 plt.colorbar(matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap), ax=axes[i])
                 axes[i].set_title(label)
@@ -168,7 +170,7 @@ class FittingTrainer(object):
         return loss
         
     def train_and_validate(self, n_epoch=100, training_interval=10, validate_interval=100,
-                           checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=16):
+                           checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=9):
         """
         
         """
@@ -198,7 +200,7 @@ class FittingTrainer(object):
                     self.save_checkpoint()
             t1.close()
                 
-    def log_to_tensorboard(self, tb_logger, label, n_iter, loss, x, pred):
+    def log_images_to_tensorboard(self, tb_logger, label, n_iter, loss, x, pred):
         tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)
         x_numpy = x.detach().numpy()
         pred_numpy = pred.detach().numpy()
@@ -209,9 +211,12 @@ class FittingTrainer(object):
         diff_vmax = max(-diff.min(), diff.max())
         diff_vmin = -diff_vmax
         
-        tb_logger.add_images("{}/data".format(label), util.color_images(x_numpy, vmin=vmin, vmax=vmax), n_iter)
-        tb_logger.add_images("{}/pred".format(label), util.color_images(pred_numpy, vmin=vmin, vmax=vmax), n_iter)
-        tb_logger.add_images("{}/diff".format(label), util.color_images(diff, vmin=diff_vmin, vmax=diff_vmax, vsym=True), n_iter)
+        tb_logger.add_image("{}/data".format(label),
+                            util.color_images(util.tile_images(x_numpy,3), vmin=vmin, vmax=vmax)[0], n_iter)
+        tb_logger.add_image("{}/pred".format(label),
+                            util.color_images(util.tile_images(pred_numpy,3), vmin=vmin, vmax=vmax)[0], n_iter)
+        tb_logger.add_image("{}/diff".format(label),
+                            util.color_images(util.tile_images(diff,3), vmin=diff_vmin, vmax=diff_vmax, vsym=True)[0], n_iter)
         
         if hasattr(self.model, 'get_suppl'):
             suppl_dict = self.model.get_suppl(colored=True)
@@ -219,7 +224,7 @@ class FittingTrainer(object):
                 for i, (key, (img, norm, cmap)) in enumerate(suppl_dict['images'].items()):
                     tb_logger.add_image("{}/{}".format(label, key), img, n_iter, dataformats="HWC")
                 
-    def log_param_to_tensorboard(self, tb_logger, label, n_iter, y, pred, params=['x','y','z']):
+    def log_params_to_tensorboard(self, tb_logger, label, n_iter, y, pred, params=['x','y','z']):
         for param in params:
             if param in pred and param in y:
                 param_y = y[param].squeeze().detach()

@@ -71,7 +71,7 @@ class BaseMapperModel(base.BaseModel):
         if len(self.cached_images) > 0:
             images = {}
             for key, val in self.cached_images.items():
-                images[key] = util.color_images(util.tile_images(val[:9], 3)[0], full_output=True)
+                images[key] = util.color_images(util.tile_images(val[:9], 3), full_output=True)
             ret['images'] = images
         return ret
     

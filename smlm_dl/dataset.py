@@ -316,7 +316,7 @@ def inspect_images(dataset, indices=None):
         images.append(data[0].mean(0))
         labels.append(data[1])
     
-    tiled_images, n_col, n_row  = util.tile_images(np.stack(images))
+    tiled_images, n_col, n_row  = util.tile_images(np.stack(images), full_output=True)
     
     fig, axes = plt.subplots(2, 1, figsize=(4*n_col, 3*n_row*2))
     im = axes[0].imshow(tiled_images)

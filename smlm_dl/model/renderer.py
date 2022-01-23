@@ -383,29 +383,28 @@ class Spline2DRenderer(BaseRendererModel):
         return x
     
     def render(self, scale=1):
-        x = torch.arange(0, 1, 1/scale)
-        y = torch.arange(0, 1, 1/scale)
+        x = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
+        y = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
         xs, ys = torch.meshgrid(x, y, indexing='ij')
 
         x = {'x': xs.flatten()[:,None,None,None],
              'y': ys.flatten()[:,None,None,None],}
         
         interpolated_images = self._calculate_template(x)
-        image_highres = np.empty(((self.template_size[0]+1)*scale, (self.template_size[1]+1)*scale))
+        interpolated_images = interpolated_images.reshape(scale, scale,
+                                                          self.template_size[0]+1, self.template_size[1]+1,)
+        interpolated_images = interpolated_images.moveaxis((2, 3), (0,2))
+        interpolated_images = interpolated_images.reshape((self.template_size[0]+1)*scale,
+                                                         (self.template_size[1]+1)*scale,)
         
-        for i, img in enumerate(interpolated_images):
-            c = i // scale
-            r = i % scale
-            image_highres[scale-c-1::scale, scale-r-1::scale] = interpolated_images[i,0].detach()
-        
-        image_highres = image_highres[scale//2:-((scale+1)//2), scale//2:-((scale+1)//2)]
-        return image_highres
+        interpolated_images = interpolated_images[scale//2:-((scale+1)//2), scale//2:-((scale+1)//2)]
+        return interpolated_images
     
     def get_suppl(self, colored=False):
         res = {'images': {},
                }
-        template = self.render(1)
-        template_2x = self.render(2)
+        template = self.render(1).detach().numpy()
+        template_2x = self.render(2).detach().numpy()
         if colored:
             template = util.color_images(template, full_output=True)
             template_2x = util.color_images(template_2x, full_output=True)
@@ -514,13 +513,15 @@ class Spline3DRenderer(BaseRendererModel):
         return x
     
     def _calculate_template(self, shifts_subpixel, shift_pixel_z):
-        index = torch.arange(4).tile(*shift_pixel_z.shape[:2], *self.coeffs.shape[:2], 1) + self.offset + shift_pixel_z.unsqueeze(-1) - 1
+        index = torch.arange(4).tile(*shift_pixel_z.shape[:2], *self.coeffs.shape[:2], 1) + self.offset + shift_pixel_z.unsqueeze(-1)
         index = torch.clamp(index, 0, self.coeffs.shape[2]-1)
 
         coeffs = self.coeffs.tile(*shift_pixel_z.shape[:2], 1, 1, 1)
         coeffs = torch.gather(coeffs, 4, index)
         
-        bases = {key: spline.calculate_bspline_basis(val, self.k) for key, val in shifts_subpixel.items()}
+        bases = {'x': spline.calculate_bspline_basis(shifts_subpixel['x'], self.k),
+                 'y': spline.calculate_bspline_basis(shifts_subpixel['y'], self.k),
+                 'z': spline.calculate_bspline_basis(1-shifts_subpixel['z'], self.k),}
         x = 0
         for i, cx in enumerate(bases['x']):
             for j, cy in enumerate(bases['y']):
@@ -533,8 +534,8 @@ class Spline3DRenderer(BaseRendererModel):
         return x
     
     def render(self, scale=1):
-        x = torch.arange(0, 1, 1/scale)
-        y = torch.arange(0, 1, 1/scale)
+        x = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
+        y = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
         z = torch.arange(0, self.template_size[2], 1/scale) - self.centering_offset[2]
         
         xs, ys, zs = torch.meshgrid(x, y, z, indexing='ij')
@@ -556,12 +557,11 @@ class Spline3DRenderer(BaseRendererModel):
     def get_suppl(self, colored=False):
         res = {'images': {},
                }
-        template = self.render(1)
-        template_2x = self.render(2)
+        template = self.render(1).detach().numpy()
         if colored:
-            template = util.color_images(template, full_output=True)
-            template_2x = util.color_images(template_2x, full_output=True)
-        res['images'].update({'template':template, 'template 2x':template_2x, })
+            template_xy = util.color_images(template[:,:,template.shape[2]//2], full_output=True)
+            template_xz = util.color_images(template[:,template.shape[1]//2,:], full_output=True)
+        res['images'].update({'template xy':template_xy, 'template xz':template_xz, })
 
         return res
     

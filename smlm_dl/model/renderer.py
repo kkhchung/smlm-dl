@@ -412,11 +412,11 @@ class Spline2DRenderer(BaseRendererModel):
 
         return res
     
-    def fit_image(self, image_groundtruth, maxiter=200, tol=1e-9):
+    def fit_image(self, image_groundtruth, rel_lr=1e-1, maxiter=100, r2_tol=1e-3):
         image_groundtruth = torch.as_tensor(image_groundtruth).type(torch.float32)
         image_groundtruth = nn.functional.pad(image_groundtruth, (0,1,0,1))
         loss_function = nn.MSELoss()
-        optimizer = torch.optim.Adam(self.parameters(), lr=10)
+        optimizer = torch.optim.Adam(self.parameters(), lr=rel_lr*image_groundtruth.max(), amsgrad=False)
         
         x = {'x':torch.zeros((1,1,1,1)),
              'y':torch.zeros((1,1,1,1))}
@@ -424,16 +424,20 @@ class Spline2DRenderer(BaseRendererModel):
         mask = torch.ones(self.coeffs.shape, dtype=torch.bool)
         mask[self.padding:-self.padding,self.padding:-self.padding] = False
         
-        print("Fitting...")
+        r2_threshold = image_groundtruth.var() * r2_tol
         loss_log = list()
+        _t = tqdm(total=maxiter)
+        _t.set_description("Fitting spline ...")
         for i in range(maxiter):
             optimizer.zero_grad()
             pred = self._render_images(x, raw=True)
             loss = loss_function(pred[0,0,:,:], image_groundtruth)
             loss_log.append(loss.detach().numpy())
+            _t.set_postfix(loss=loss.detach().numpy())
+            _t.update(1)
             
-            if (loss < tol):
-                print("Early termination after {} iterations, loss tol < {} reached".format(i, tol))
+            if (loss < r2_threshold):
+                print("Early termination after {} iterations, r2 tol < {} reached".format(i, r2_tol))
                 break
                 
             loss.backward()
@@ -565,12 +569,12 @@ class Spline3DRenderer(BaseRendererModel):
 
         return res
     
-    def fit_image(self, volume_groundtruth, maxiter=10, tol=1e-9):
+    def fit_image(self, volume_groundtruth, rel_lr=1e-2, maxiter=50, r2_tol=1e-3):
         volume_groundtruth = torch.as_tensor(volume_groundtruth).type(torch.float32)
         volume_groundtruth = nn.functional.pad(volume_groundtruth, (0,0,0,1,0,1))
         
         loss_function = nn.MSELoss()
-        optimizer = torch.optim.Adam(self.parameters(), lr=1e3, amsgrad=False)
+        optimizer = torch.optim.Adam(self.parameters(), lr=rel_lr*volume_groundtruth.max(), amsgrad=False)
         
         x = {'x':torch.zeros((1,1,1,1)),
              'y':torch.zeros((1,1,1,1)),
@@ -580,6 +584,7 @@ class Spline3DRenderer(BaseRendererModel):
         mask = torch.ones(self.coeffs.shape, dtype=torch.bool)
         mask[self.padding:-self.padding,self.padding:-self.padding] = False
 
+        r2_threshold = volume_groundtruth.var() * r2_tol
         loss_log = list()
         _t = tqdm(total=maxiter)
         _t.set_description("Fitting spline ...")
@@ -593,8 +598,8 @@ class Spline3DRenderer(BaseRendererModel):
             _t.set_postfix(loss=loss.detach().numpy())
             _t.update(1)
             
-            if (loss < tol):
-                print("Early termination after {} iterations, loss tol < {} reached".format(i, tol))
+            if (loss < r2_threshold):
+                print("Early termination after {} iterations, r2 tol < {} reached".format(i, r2_tol))
                 break
                 
             loss.backward()
@@ -606,4 +611,3 @@ class Spline3DRenderer(BaseRendererModel):
         if loss_log[-1] > 1 and r2 < 0.9:
             print("Not well fitted.")
         return loss_log
-    

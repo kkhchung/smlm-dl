@@ -306,6 +306,18 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         return psfs
 
 
+class FileWrapperDataset(Dataset):
+    def __init__(self, file_path, file_loader, slices=(slice(None),), stack_to_volume=False, cache=True):
+        self.file = file_loader(file_path, slices=slices, stack_to_volume=stack_to_volume, cache=cache)
+        print(", ".join(["{}: {}".format(key, val) for key, val in {"filepath":self.file.file_path, "frames":len(self.file), "image shape":self.file[0].shape}.items()]))
+    
+    def __len__(self):
+        return len(self.file)
+    
+    def __getitem__(self, key):
+        return self.file[key], {'id': key}
+
+
 def inspect_images(dataset, indices=None):
     if indices is None:
         indices = np.random.choice(len(dataset), min(8, len(dataset)), replace=False)

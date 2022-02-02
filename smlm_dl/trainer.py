@@ -191,7 +191,7 @@ class FittingTrainer(object):
                                         tb_logger=tb_logger if (epoch_i % training_interval == 0) else None,
                                         tb_log_limit_images=tb_log_limit_images, t=t1)
 
-                if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
+                if (not self.valid_data_loader is None) and (((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch)):
                     validation_loss = self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger,
                                                     show_images=(epoch_i+1)==n_epoch, tb_log_limit_images=tb_log_limit_images)
                     t0.set_postfix(val_loss=validation_loss.detach().numpy())

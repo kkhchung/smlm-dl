@@ -336,10 +336,11 @@ def inspect_images(dataset, indices=None):
                          fontsize='medium',
                          transform=axes[j].transAxes)
             
-    fig, axes = plt.subplots(1, len(dataset.params), figsize=(4*len(dataset.params), 3))
-    for i, (key, val) in enumerate(dataset.params.items()):
-        axes[i].hist(val.flatten(), bins=20)
-        axes[i].set_xlabel(key)
+    if hasattr(dataset, 'params'):
+        fig, axes = plt.subplots(1, len(dataset.params), figsize=(4*len(dataset.params), 3))
+        for i, (key, val) in enumerate(dataset.params.items()):
+            axes[i].hist(val.flatten(), bins=20)
+            axes[i].set_xlabel(key)
     
     if hasattr(dataset, 'pupil'):
         fig, axes = plt.subplots(1, 3, figsize=(4*2 + 8, 3), gridspec_kw={'width_ratios': [1,1,3]})

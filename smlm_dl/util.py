@@ -32,6 +32,7 @@ def tile_images(img, n_col=8, full_output=False):
     # convert N, C, H, W data to 1, C, row*H, col*W
     # or N, H, W to row*H, col*W
     img_count = img.shape[0]
+    n_col = min(n_col, img_count)
     n_row = np.ceil(img_count / n_col).astype(int)
     remainder = n_col * n_row - img_count
     img_tiled = np.pad(img, ((0, remainder),) + ((0,0),)*(len(img.shape)-1))

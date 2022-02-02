@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import enum
 import scipy
 from scipy import ndimage, signal
-import zernike, util
+import io, util, zernike
 from skimage import restoration
 
 @enum.unique
@@ -308,15 +308,10 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
 
 def inspect_images(dataset, indices=None):
     if indices is None:
-        indices = np.random.choice(len(dataset), 8, replace=False)
-    images = []
-    labels = []
-    for i in indices:
-        data = dataset[i]
-        images.append(data[0].mean(0))
-        labels.append(data[1])
+        indices = np.random.choice(len(dataset), min(8, len(dataset)), replace=False)
+    images, labels = zip(*[dataset[i] for i in indices])
     
-    tiled_images, n_col, n_row  = util.tile_images(np.stack(images), full_output=True)
+    tiled_images, n_col, n_row  = util.tile_images(util.reduce_images_dim(np.stack(images, axis=0)), full_output=True)
     
     fig, axes = plt.subplots(2, 1, figsize=(4*n_col, 3*n_row*2))
     im = axes[0].imshow(tiled_images)

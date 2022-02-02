@@ -45,3 +45,29 @@ def tile_images(img, n_col=8, full_output=False):
         return img_tiled, n_col, n_row
     else:
         return img_tiled
+
+
+def reduce_images_dim(images, ch_func="mean", out_dim=3, dim_func="max"):
+    # expect N, C, H, W, ...
+    if ch_func == "mean":
+        images = images.mean(1)
+    elif ch_func == "max":
+        images = images.max(1)
+    elif ch_func == "skip":
+        out_dim += 1
+    else:
+        raise Exception("ch_func not recognized")
+    
+    extra_dim = images.ndim - out_dim
+    extra_dim = tuple(np.arange(-extra_dim, 0, 1))
+    if dim_func == "mean":
+        images = images.mean(axis=extra_dim)
+    elif dim_func == "max":
+        images = images.max(axis=extra_dim)
+    elif dim_func == "middle":
+        for dim in extra_dim:
+            images = images[...,images.shape[-1]//2]
+    else:
+        raise Exception("dim_func not recognized")
+    
+    return images

@@ -76,7 +76,9 @@ def check_model(model, dataloader=None):
         
         n_col = 8
         n_images = 8
-        features_tiled, n_col, n_row = util.tile_images(features[:n_images].mean(1), n_col, full_output=True)
+        
+        features_images = util.reduce_images_dim(features[:n_images])
+        features_tiled, n_col, n_row = util.tile_images(features_images, n_col, full_output=True)
         
         fig, axes = plt.subplots(3 if pred_is_image else 1, 1,
                                  figsize=(4*n_col, 3*n_row*(3 if pred_is_image else 1)),
@@ -86,7 +88,8 @@ def check_model(model, dataloader=None):
         axes[0,0].set_title("data")
         
         if pred_is_image:
-            pred_tiled, n_col, n_row = util.tile_images(pred[:n_images].mean(1), n_col, full_output=True)
+            pred_images = util.reduce_images_dim(pred[:n_images])
+            pred_tiled, n_col, n_row = util.tile_images(pred_images, n_col, full_output=True)
             im = axes[1,0].imshow(pred_tiled)
             plt.colorbar(im, ax=axes[1,0])
             axes[1,0].set_title("predicted")
@@ -114,15 +117,16 @@ def check_model(model, dataloader=None):
                 
     if hasattr(model, 'render_example_images'):
         example_images = model.render_example_images(8)
+        example_images = util.reduce_images_dim(example_images)
         fig, axes = plt.subplots(1, len(example_images), figsize=(4*len(example_images), 3), squeeze=False)
         for i, img in enumerate(example_images):
-            im = axes[0, i].imshow(img[0])
+            im = axes[0, i].imshow(img)
             plt.colorbar(im, ax=axes[0, i])
             axes[0, i].set_title("E.g. {}".format(i))
             
         fig, axes = plt.subplots(1, len(example_images), figsize=(4*len(example_images), 3), squeeze=False)
         for i, img in enumerate(example_images):
-            im = axes[0, i].imshow(np.log10(img[0]))
+            im = axes[0, i].imshow(np.log10(img))
             plt.colorbar(im, ax=axes[0, i])
             axes[0, i].set_title("E.g. {}".format(i))
             

@@ -203,7 +203,9 @@ class FittingTrainer(object):
     def log_images_to_tensorboard(self, tb_logger, label, n_iter, loss, x, pred):
         tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)
         x_numpy = x.detach().numpy()
+        x_numpy = util.reduce_images_dim(x_numpy, 'skip')
         pred_numpy = pred.detach().numpy()
+        pred_numpy = util.reduce_images_dim(pred_numpy, 'skip')
         vmin = min(x_numpy.min(), pred_numpy.min())
         vmax = max(x_numpy.max(), pred_numpy.max())
         

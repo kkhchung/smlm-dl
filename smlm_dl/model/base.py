@@ -33,6 +33,15 @@ class ParameterModule(nn.Module):
         return self.parameter
 
 
+class ViewModule(nn.Module):
+    def __init__(self, shape):
+        super().__init__()
+        self.shape = shape
+    
+    def forward(self, x):
+        return x.view(-1, *self.shape)
+
+
 class FitParameter(object):
     activation = None
     offset = None

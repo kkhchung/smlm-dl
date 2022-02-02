@@ -1,4 +1,5 @@
 import functools
+import numpy as np
 import torch
 from torch import nn
 
@@ -18,26 +19,26 @@ class BaseEncoderModel(base.BaseModel):
 class IdEncoderModel(BaseEncoderModel):
     image_input = False
     
-    def __init__(self, num_img, last_out_channels=2, init_weights=None):
+    def __init__(self, num_img, last_out_channels=2, out_img_shape=(1,1,), init_weights=None):
+        self.out_img_shape = out_img_shape
         super().__init__(last_out_channels=last_out_channels, **{"num_img":num_img, "init_weights":init_weights})
     
     def build_model(self, num_img, init_weights=None):
         self.one_hot = functools.partial(torch.nn.functional.one_hot, num_classes=num_img)
+        out_shape = [self.last_out_channels,] + list(self.out_img_shape)
         self.encoders = nn.ModuleDict()
-        self.encoders["scale"] = nn.Linear(num_img, self.last_out_channels, bias=False)
+        self.encoders["scale"] = nn.Linear(num_img, np.prod(out_shape), bias=False)
+        self.encoders["view"] = base.ViewModule(out_shape)
         if not init_weights is None:
             with torch.no_grad():
-                print(init_weights.shape)
-                print(self.encoders["scale"].weight.shape)
-                self.encoders["scale"].weight.copy_(torch.as_tensor(init_weights))
+                self.encoders["scale"].weight.view(-1).copy_(torch.as_tensor(init_weights).view(-1))
     
     def forward(self, x):
-        x = x.to(torch.long) 
+        x = x.to(torch.long)
         x = self.one_hot(x)
         x = x.to(torch.float)
         for key, val in self.encoders.items():
             x = val(x)
-        x = x.unsqueeze(-1).unsqueeze(-1)
         return x
     
     

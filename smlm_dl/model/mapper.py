@@ -1,3 +1,4 @@
+import functools
 import numpy as np
 import torch
 from torch import nn
@@ -224,6 +225,35 @@ class StackedConvMapper(BaseMapperModel):
                               self.mapping_modules['psf_params'],
                               [per_channel_params, [max_psf_count,]*out_channels]))
         self.in_channels += in_channels * max_psf_count
+
+
+class DirectImageMapperModel(DirectMapperModel):
+    def __init__(self, img_size, fit_params, max_psf_count, new_params_ref, params_ref_no_scale):
+        print("max_psf_count, params_ref_no_scale ignored")
+        
+        params_ref = {param: model.FitParameter(nn.ReLU(), 0, 1, 0, False) for param in fit_params}
+        params_ref.update(new_params_ref)
+        
+        super().__init__(img_size=img_size, fit_params=fit_params,
+                         max_psf_count=1, new_params_ref=params_ref,
+                         params_ref_no_scale=False)
+        
+        for mapping in self.mappings:
+            _, module, (channels, _) = mapping
+            module.register_forward_hook(functools.partial(self.save_output_image, label=','.join(channels)))
+        
+    def generate_params_ref(self, new_params_ref, img_size):
+        params_ref = dict()
+        params_ref.update(new_params_ref)
+        return params_ref
+        
+    def get_random_mapped_params(self, batch_size):
+        x = (torch.rand((batch_size, self.in_channels, *self.img_size)) - 0.5) * 2
+        x = self.forward(x)
+        return x
+    
+    def save_output_image(self, module, input, output, label="noname"):
+        self.cached_images[label] = util.reduce_images_dim(output.detach().numpy())
 
 
 class OffsetScale(nn.Module):

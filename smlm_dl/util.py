@@ -72,3 +72,36 @@ def reduce_images_dim(images, ch_func="mean", out_dim=3, dim_func="max"):
         raise Exception("dim_func not recognized")
     
     return images
+
+
+def calculate_padding(init_size, final_size, flat=True):
+    padding = [(sizes[1] - sizes[0])//2 for sizes in zip(init_size, final_size)]
+    padding = list()
+    for size in zip(init_size, final_size):
+        diff = size[1] - size[0]
+        if diff < 0:
+            raise Exception("final_size needs to be equal or larger than init_size in all dimensions")
+        if not diff % 2 == 0:
+            raise Exception("odd amount of padding not implemented")
+        padding.append(diff//2)
+    
+    if flat:
+        padding = np.repeat(padding, 2)
+    else:
+        padding = [(pad, pad) for pad in padding]
+    
+    return padding
+
+
+def calculate_slicing(init_size, final_size):
+    padding = list()
+    for size in zip(init_size, final_size):
+        diff = size[0] - size[1]
+        if diff < 0:
+            raise Exception("final_size needs to be equal or smaller than init_size in all dimensions")
+        if not diff % 2 == 0:
+            raise Exception("odd amount of padding not implemented")
+        padding.append(diff//2)
+    padding_slice = tuple([slice(None) if pad==0 else slice(pad, -pad) for pad in padding])
+    
+    return padding_slice

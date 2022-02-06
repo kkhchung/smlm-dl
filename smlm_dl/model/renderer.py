@@ -622,15 +622,15 @@ class PassthroughRenderer(BaseRendererModel):
 class ConvolutionRenderer(BaseRendererModel):
     def __init__(self, img_size, fit_params, kernel, cal_size=None, out_size=None):
         super().__init__(img_size, fit_params)
-        if cal_size is None:
-            self.cal_size = [max(sizes) for sizes in zip(img_size, kernel.shape, out_size)]
-        else:
-            self.cal_size = cal_size
-        
         if out_size is None:
             self.out_size = img_size
         else:
             self.out_size = out_size
+        
+        if cal_size is None:
+            self.cal_size = [max(sizes) for sizes in zip(img_size, kernel.shape, self.out_size)]
+        else:
+            self.cal_size = cal_size
         
         self.image_padding = tuple(util.calculate_padding(self.img_size, self.cal_size)[::-1])
         self.image_slicing = (slice(None),)*2 + util.calculate_slicing(self.cal_size, self.out_size)

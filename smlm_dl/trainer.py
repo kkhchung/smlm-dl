@@ -191,7 +191,7 @@ class FittingTrainer(object):
                                         tb_logger=tb_logger if (epoch_i % training_interval == 0) else None,
                                         tb_log_limit_images=tb_log_limit_images, t=t1)
 
-                if ((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch):
+                if (not self.valid_data_loader is None) and (((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch)):
                     validation_loss = self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger,
                                                     show_images=(epoch_i+1)==n_epoch, tb_log_limit_images=tb_log_limit_images)
                     t0.set_postfix(val_loss=validation_loss.detach().numpy())
@@ -203,7 +203,9 @@ class FittingTrainer(object):
     def log_images_to_tensorboard(self, tb_logger, label, n_iter, loss, x, pred):
         tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)
         x_numpy = x.detach().numpy()
+        x_numpy = util.reduce_images_dim(x_numpy, 'skip')
         pred_numpy = pred.detach().numpy()
+        pred_numpy = util.reduce_images_dim(pred_numpy, 'skip')
         vmin = min(x_numpy.min(), pred_numpy.min())
         vmax = max(x_numpy.max(), pred_numpy.max())
         

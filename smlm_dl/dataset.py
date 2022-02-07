@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import enum
 import scipy
 from scipy import ndimage, signal
-import zernike, util
+import io, util, zernike
 from skimage import restoration
 
 @enum.unique
@@ -306,17 +306,24 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         return psfs
 
 
+class FileWrapperDataset(Dataset):
+    def __init__(self, file_path, file_loader, slices=(slice(None),), stack_to_volume=False, cache=True):
+        self.file = file_loader(file_path, slices=slices, stack_to_volume=stack_to_volume, cache=cache)
+        print(", ".join(["{}: {}".format(key, val) for key, val in {"filepath":self.file.file_path, "frames":len(self.file), "image shape":self.file[0].shape}.items()]))
+    
+    def __len__(self):
+        return len(self.file)
+    
+    def __getitem__(self, key):
+        return self.file[key], {'id': key}
+
+
 def inspect_images(dataset, indices=None):
     if indices is None:
-        indices = np.random.choice(len(dataset), 8, replace=False)
-    images = []
-    labels = []
-    for i in indices:
-        data = dataset[i]
-        images.append(data[0].mean(0))
-        labels.append(data[1])
+        indices = np.random.choice(len(dataset), min(8, len(dataset)), replace=False)
+    images, labels = zip(*[dataset[i] for i in indices])
     
-    tiled_images, n_col, n_row  = util.tile_images(np.stack(images), full_output=True)
+    tiled_images, n_col, n_row  = util.tile_images(util.reduce_images_dim(np.stack(images, axis=0)), full_output=True)
     
     fig, axes = plt.subplots(2, 1, figsize=(4*n_col, 3*n_row*2))
     im = axes[0].imshow(tiled_images)
@@ -341,10 +348,11 @@ def inspect_images(dataset, indices=None):
                          fontsize='medium',
                          transform=axes[j].transAxes)
             
-    fig, axes = plt.subplots(1, len(dataset.params), figsize=(4*len(dataset.params), 3))
-    for i, (key, val) in enumerate(dataset.params.items()):
-        axes[i].hist(val.flatten(), bins=20)
-        axes[i].set_xlabel(key)
+    if hasattr(dataset, 'params'):
+        fig, axes = plt.subplots(1, len(dataset.params), figsize=(4*len(dataset.params), 3))
+        for i, (key, val) in enumerate(dataset.params.items()):
+            axes[i].hist(val.flatten(), bins=20)
+            axes[i].set_xlabel(key)
     
     if hasattr(dataset, 'pupil'):
         fig, axes = plt.subplots(1, 3, figsize=(4*2 + 8, 3), gridspec_kw={'width_ratios': [1,1,3]})

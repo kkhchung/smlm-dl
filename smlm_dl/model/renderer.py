@@ -611,3 +611,78 @@ class Spline3DRenderer(BaseRendererModel):
         if loss_log[-1] > 1 and r2 < 0.9:
             print("Not well fitted.")
         return loss_log
+
+
+class PassthroughRenderer(BaseRendererModel):
+    def __init__(self, img_size, fit_params):
+        super().__init__(img_size, fit_params)
+            
+    def render_images(self, params, batch_size, as_numpy_array=False):
+        images = torch.cat([param for param in params.values() if param.ndim > 1], axis=1)
+        if as_numpy_array:
+            images = images.detach().numpy()
+        return images
+
+
+class ConvolutionRenderer(BaseRendererModel):
+    def __init__(self, img_size, fit_params, kernel, cal_size=None, out_size=None):
+        super().__init__(img_size, fit_params)
+        if out_size is None:
+            self.out_size = img_size
+        else:
+            self.out_size = out_size
+        
+        if cal_size is None:
+            self.cal_size = [max(sizes) for sizes in zip(img_size, kernel.shape, self.out_size)]
+        else:
+            self.cal_size = cal_size
+        
+        self.image_padding = tuple(util.calculate_padding(self.img_size, self.cal_size)[::-1])
+        self.image_slicing = (slice(None),)*2 + util.calculate_slicing(self.cal_size, self.out_size)
+        
+        self.kernel_fft = nn.Parameter(self.generate_kernel_fft(kernel, self.cal_size))
+        
+        self.background = nn.Parameter(torch.rand(1)*10 + 10)
+        
+    def generate_kernel_fft(self, kernel, cal_size):
+        kernel = torch.tensor(kernel, dtype=torch.float)
+        kernel /= kernel.sum()
+        kernel = nn.functional.pad(kernel, tuple(util.calculate_padding(kernel.shape, cal_size)[::-1]))
+        while kernel.ndim < 5:
+            kernel = kernel.unsqueeze(0)
+        kernel_fft = torch.fft.fftn(kernel, dim=(2,3,4),)
+        
+        return kernel_fft
+        
+    def _render_images(self, params, batch_size):
+        ch0 = params[self.fit_params[0]]
+        while ch0.ndim < 5:
+            ch0 = ch0.unsqueeze(-1)
+        
+        ch0 = nn.functional.pad(ch0, self.image_padding)
+        x_fft = torch.fft.fftn(ch0, dim=(2,3,4))
+        
+        conv_fft = x_fft * self.kernel_fft
+        conv_img = torch.fft.ifftn(conv_fft, dim=(2,3,4))
+        conv_img = torch.fft.fftshift(conv_img)
+        
+        conv_img = conv_img[self.image_slicing]
+        
+        conv =  conv_img.abs() + self.background
+            
+        return conv
+    
+    def get_suppl(self, colored=False):
+        res = {'images': {},
+               }
+        kernel = torch.fft.ifftn(self.kernel_fft,  dim=(2,3,4)).abs()[0,0]
+        kernel = torch.log10(kernel)
+        kernel = kernel.detach().numpy()
+        kernel_xy = kernel[:,:,kernel.shape[2]//2]
+        kernel_xz = kernel[:,kernel.shape[1]//2,:]
+        if colored:
+            kernel_xy = util.color_images(kernel_xy, full_output=True)
+            kernel_xz = util.color_images(kernel_xz, full_output=True)
+        res['images'].update({'kernel xy':kernel_xy, 'kernel xz':kernel_xz, })
+
+        return res

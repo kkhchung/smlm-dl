@@ -6,6 +6,8 @@ class Configure(ConfigParser):
     def __init__(self):
         defaults = {"LOG_PATH": {"run": r".\runs",},
                     "ID": {"computer": socket.gethostname(),},
+                    "TEST_DATASET_PATH": {"hagen": r".\datasets\hagen",
+                                         "epfl": r".\datasets\epfl"},
                    }
         ConfigParser.__init__(self)
         self.read_dict(defaults)

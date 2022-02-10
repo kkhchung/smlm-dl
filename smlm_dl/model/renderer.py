@@ -650,6 +650,7 @@ class ConvolutionRenderer(BaseRendererModel):
         kernel = nn.functional.pad(kernel, tuple(util.calculate_padding(kernel.shape, cal_size)[::-1]))
         while kernel.ndim < 5:
             kernel = kernel.unsqueeze(0)
+        kernel = torch.fft.fftshift(kernel)
         kernel_fft = torch.fft.fftn(kernel, dim=(2,3,4),)
         
         return kernel_fft
@@ -664,7 +665,6 @@ class ConvolutionRenderer(BaseRendererModel):
         
         conv_fft = x_fft * self.kernel_fft
         conv_img = torch.fft.ifftn(conv_fft, dim=(2,3,4))
-        conv_img = torch.fft.fftshift(conv_img)
         
         conv_img = conv_img[self.image_slicing]
         
@@ -676,7 +676,8 @@ class ConvolutionRenderer(BaseRendererModel):
         res = {'images': {},
                }
         kernel = torch.fft.ifftn(self.kernel_fft,  dim=(2,3,4)).abs()[0,0]
-        kernel = torch.log10(kernel)
+        kernel = torch.fft.ifftshift(kernel)
+        # kernel = torch.log10(kernel)
         kernel = kernel.detach().numpy()
         kernel_xy = kernel[:,:,kernel.shape[2]//2]
         kernel_xz = kernel[:,kernel.shape[1]//2,:]

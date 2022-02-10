@@ -69,7 +69,7 @@ class FitParameter(object):
         return text
 
 
-def check_model(model, dataloader=None):
+def check_model(model, dataloader=None, n_images=8):
     is_training = model.training
     model.train(False)
     
@@ -84,7 +84,6 @@ def check_model(model, dataloader=None):
         pred_is_image = pred.shape[2]>1 and pred.shape[3]>1
         
         n_col = 8
-        n_images = 8
         
         features_images = util.reduce_images_dim(features[:n_images])
         features_tiled, n_col, n_row = util.tile_images(features_images, n_col, full_output=True)

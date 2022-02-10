@@ -334,7 +334,7 @@ def inspect_images(dataset, indices=None):
     for i, id in enumerate(indices):
         label = "{}:\t".format(id)
         for key, val in labels[i].items():
-            label += " [{} =".format(key, val.squeeze())
+            label += " [{} =".format(key)
             for datum in np.atleast_1d(val.squeeze()):
                 label += " {:.3f},".format(datum)
             label += "],"

@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import enum
 import scipy
 from scipy import ndimage, signal
-import io, util, zernike
+import fileloader, io, util, zernike
 from skimage import restoration
 
 @enum.unique
@@ -316,6 +316,38 @@ class FileWrapperDataset(Dataset):
     
     def __getitem__(self, key):
         return self.file[key], {'id': key}
+
+
+class ResamplingFileWrapperDataset(FileWrapperDataset):
+    # overlap with SingleImageDataset?
+    def __init__(self, file_path, out_size=(64, 64, 64), length=16, #augmentations={},
+                 file_loader=fileloader.PilImageFileLoader, slices=(slice(None),),
+                 stack_to_volume=False, cache=True):
+        super().__init__(file_path=file_path, file_loader=file_loader,
+                        slices=slices, stack_to_volume=stack_to_volume,
+                         cache=cache)
+        
+        self.length = length
+        self.in_size = self.file[0][0].shape
+        self.out_size = [min(out_size[dim], self.in_size[dim]) for dim in range(len(out_size))]
+        
+        if (self.out_size < list(out_size)):
+            print("out_size {} clipped to {}".format(out_size, self.out_size))
+        print(self.in_size, self.out_size)
+    
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, key):
+        file_id = np.random.randint(0, len(self.file), dtype=np.int32)
+        shifts = np.asarray([np.random.randint(0, self.in_size[dim] - self.out_size[dim] + 1) for dim in range(len(self.in_size))])
+        
+        labels = {'id':file_id, 'slice_x':shifts[0], 'slice_y':shifts[1], 'slice_z':shifts[2], }
+        
+        slicing = np.stack([shifts, shifts + self.out_size], -1)
+        slicing = tuple([slice(None),] + [slice(a, b) for (a, b) in slicing])
+        
+        return self.file[file_id][slicing], labels
 
 
 def inspect_images(dataset, indices=None):

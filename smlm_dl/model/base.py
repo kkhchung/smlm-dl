@@ -16,7 +16,15 @@ class BaseModel(nn.Module):
             if self.image_input:
                 pred = nn.Module.__call__(self, x)
             else:
-                pred = nn.Module.__call__(self, y["id"])
+                y_out = [y['id']]
+                for dim in ['slice_x', 'slice_y', 'slice_z']:
+                    if dim in y:
+                        y_out.append(y[dim])
+                    else:
+                        break
+                y_out = torch.stack(y_out, axis=1)
+                
+                pred = nn.Module.__call__(self, y_out)
             return pred
 
 

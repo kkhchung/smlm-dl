@@ -4,6 +4,7 @@ import torch
 from torch import nn
 
 from . import base
+import util
 
 
 class BaseEncoderModel(base.BaseModel):
@@ -19,29 +20,70 @@ class BaseEncoderModel(base.BaseModel):
 class IdEncoderModel(BaseEncoderModel):
     image_input = False
     
-    def __init__(self, num_img, last_out_channels=2, out_img_shape=(1,1,), init_weights=None):
+    def __init__(self, num_img, last_out_channels=2, out_img_shape=(1,1,), internal_img_shape=None, init_weights=None):
         self.out_img_shape = out_img_shape
+        if internal_img_shape is None:
+            self.internal_img_shape = self.out_img_shape
+        else:
+            self.internal_img_shape = internal_img_shape
+        self.need_slicing = any([sizes[0]!=sizes[1] for sizes in zip(self.internal_img_shape, self.out_img_shape)])
+        
         super().__init__(last_out_channels=last_out_channels, **{"num_img":num_img, "init_weights":init_weights})
-    
+        
     def build_model(self, num_img, init_weights=None):
         self.one_hot = functools.partial(torch.nn.functional.one_hot, num_classes=num_img)
-        out_shape = [self.last_out_channels,] + list(self.out_img_shape)
+        internal_shape = [self.last_out_channels,] + list(self.internal_img_shape)
         self.encoders = nn.ModuleDict()
-        self.encoders["scale"] = nn.Linear(num_img, np.prod(out_shape), bias=False)
-        self.encoders["view"] = base.ViewModule(out_shape)
+        self.encoders["scale"] = nn.Linear(num_img, np.prod(internal_shape), bias=False)
+        self.encoders["view"] = base.ViewModule(internal_shape)
         if not init_weights is None:
             with torch.no_grad():
-                self.encoders["scale"].weight.view(-1).copy_(torch.as_tensor(init_weights).view(-1))
+                init_weights = torch.as_tensor(init_weights)
+                init_weights = init_weights.unsqueeze(0).expand([num_img]+[-1,]*init_weights.ndim)
+                self.encoders["scale"].weight.view(-1).copy_(init_weights.reshape(-1))
+        print('need slicing: {}'.format(self.need_slicing))
+        if self.need_slicing is True:
+            self._build_slicing_caches()
     
     def forward(self, x):
-        x = x.to(torch.long)
-        x = self.one_hot(x)
-        x = x.to(torch.float)
+        img = self._fetch_images(x)
+        if self.need_slicing:
+            for dim in range(len(self.out_img_shape)):
+                slice_index = getattr(self, "slice{}".format(dim))
+                slice_index = slice_index + x[:,dim+1].type(torch.int32).view(-1,1,1,1,1)
+                slice_index = slice_index.tile([1, 1] + [1,] * len(self.out_img_shape))
+                img = torch.gather(img, dim+2, slice_index)
+        return img
+        
+    def _build_slicing_caches(self):
+        ndim = 2 + len(self.out_img_shape)
+        view_shape = [1,] * ndim
+        img_dim = [1,]*2 + list(self.internal_img_shape)
+        for dim, length in enumerate(self.out_img_shape):
+            new_view_shape= list(view_shape)
+            new_view_shape[2+dim] = -1
+            cache = torch.arange(0, length).view(new_view_shape)
+            img_dim[2+dim] = 1
+            cache = cache.tile(img_dim)
+            img_dim[2+dim] = self.out_img_shape[dim]
+            self.register_buffer("slice{}".format(dim), cache)
+        
+    def _fetch_images(self, x):
+        ind = x[:,0].to(torch.long)
+        ind = self.one_hot(ind)
+        ind = ind.to(torch.float)
+        img = ind
         for key, val in self.encoders.items():
-            x = val(x)
-        return x
-    
-    
+            img = val(img)
+        return img
+        
+    def get_suppl(self, colored=False):
+        ret = {'images':{}}
+        img = self._fetch_images(torch.zeros((1,1), dtype=torch.long))
+        ret['images']['test'] = util.color_images(img.detach()[0,0,:,:,:].sum(-1), full_output=True)
+        return ret
+
+
 class ImageEncoderModel(BaseEncoderModel):
     image_input = True
     

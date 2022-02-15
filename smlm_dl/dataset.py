@@ -30,6 +30,7 @@ class ImageDataset(Dataset):
             if not isinstance(key, Augmentation):
                 raise Exception("Augmentation '{}' not recognized. Use Augmentation enum.".format(key))
         
+        self.params_range = image_params
         self.augmentations = augmentations
         self.padding = augmentations.get(Augmentation.PIXEL_SHIFT, [0,0]) # x, y
         self.gen_size = (out_size[0]+2*self.padding[0], out_size[1]+2*self.padding[1])
@@ -90,11 +91,11 @@ class ImageDataset(Dataset):
         raise NotImplementedError()
         
     def add_noise(self, images, noise_params):
-        ret = images
-        if 'poisson' in noise_params:
-            ret = np.random.poisson(images)
+        ret = images.copy()
+        if noise_params.get('poisson', False) is True:
+            ret += np.random.poisson(images) - images
         if 'gaussian' in noise_params:
-            ret = np.random.normal(images, noise_params['gaussian'])
+            ret += np.random.normal(np.zeros_like(images), noise_params['gaussian'])
         return ret
     
     def __len__(self):

@@ -21,6 +21,7 @@ class IdEncoderModel(BaseEncoderModel):
     image_input = False
     
     def __init__(self, num_img, last_out_channels=2, out_img_shape=(1,1,), internal_img_shape=None, init_weights=None):
+        self.num_img = num_img
         self.out_img_shape = out_img_shape
         if internal_img_shape is None:
             self.internal_img_shape = self.out_img_shape
@@ -28,18 +29,18 @@ class IdEncoderModel(BaseEncoderModel):
             self.internal_img_shape = internal_img_shape
         self.need_slicing = any([sizes[0]!=sizes[1] for sizes in zip(self.internal_img_shape, self.out_img_shape)])
         
-        super().__init__(last_out_channels=last_out_channels, **{"num_img":num_img, "init_weights":init_weights})
+        super().__init__(last_out_channels=last_out_channels, **{"init_weights":init_weights})
         
-    def build_model(self, num_img, init_weights=None):
-        self.one_hot = functools.partial(torch.nn.functional.one_hot, num_classes=num_img)
+    def build_model(self, init_weights=None):
+        self.one_hot = functools.partial(torch.nn.functional.one_hot, num_classes=self.num_img)
         internal_shape = [self.last_out_channels,] + list(self.internal_img_shape)
         self.encoders = nn.ModuleDict()
-        self.encoders["scale"] = nn.Linear(num_img, np.prod(internal_shape), bias=False)
+        self.encoders["scale"] = nn.Linear(self.num_img, np.prod(internal_shape), bias=False)
         self.encoders["view"] = base.ViewModule(internal_shape)
         if not init_weights is None:
             with torch.no_grad():
                 init_weights = torch.as_tensor(init_weights)
-                init_weights = init_weights.unsqueeze(0).expand([num_img]+[-1,]*init_weights.ndim)
+                init_weights = init_weights.unsqueeze(0).expand([self.num_img]+[-1,]*init_weights.ndim)
                 self.encoders["scale"].weight.view(-1).copy_(init_weights.reshape(-1))
         print('need slicing: {}'.format(self.need_slicing))
         if self.need_slicing is True:
@@ -77,11 +78,16 @@ class IdEncoderModel(BaseEncoderModel):
             img = val(img)
         return img
         
-    def get_suppl(self, colored=False):
-        ret = {'images':{}}
-        img = self._fetch_images(torch.zeros((1,1), dtype=torch.long))
-        ret['images']['test'] = util.color_images(img.detach()[0,0,:,:,:].sum(-1), full_output=True)
-        return ret
+#     def get_suppl(self, colored=False):
+#         ret = {'plots':{}}
+#         images = self._fetch_images(torch.arange(self.num_img).unsqueeze(-1)).detach().numpy()
+        
+#         def plot_suppl(ax):
+#             ax.boxplot(images.squeeze(), vert=True)
+#             ax.set_xlabel("params")
+        
+#         ret['plots']['out_params'] = {"kwargs":{}, "plot":plot_suppl}
+#         return ret
 
 
 class ImageEncoderModel(BaseEncoderModel):

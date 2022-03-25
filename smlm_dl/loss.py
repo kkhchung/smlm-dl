@@ -96,14 +96,20 @@ class GaussPoissonMLECameraLoss(CameraLoss):
         input_poisson = torch.clamp(input, 0)
         poisson_std_proportion = torch.sqrt(input_poisson / (input_poisson + self.var))
         self.prop_poisson_noise = nn.ModuleDict({
-            "base": model.base.ParameterModule(-torch.log(1/poisson_std_proportion-1)),
-            "clip": nn.Sigmoid(),
+            # "base": model.base.ParameterModule(-torch.log(1/poisson_std_proportion-1)),
+            # "clip": nn.Sigmoid(),
+            "base": model.base.ParameterModule(6*(poisson_std_proportion-0.5)),
+            "clip": nn.Hardsigmoid(),
         })
-        self.optimizer = torch.optim.LBFGS(self.prop_poisson_noise["base"].parameters(), lr=0.5,
+        self.optimizer = torch.optim.LBFGS(self.prop_poisson_noise["base"].parameters(),
+                                           lr=1.0,
                                            max_iter=50,
-                                           tolerance_grad=1e-1,
-                                           tolerance_change=1e-3,
-                                           history_size=10)
+                                           max_eval=100,
+                                           tolerance_grad=1e-3,
+                                           tolerance_change=1e-4,
+                                           history_size=10,
+                                           line_search_fn=None,
+                                          )
         
         if self.debug:
             self.optim_counts = 0
@@ -155,10 +161,16 @@ class GaussPoissonMLECameraLoss(CameraLoss):
             self.optim_counts = self.optim_counts + 1
         return loss
     
-    def _calculate_poisson_nll(self, input, target, eps=1e-8):
-        poisson_nll_a = input - target * torch.log(input + eps) 
-        # poisson_nll_b = target * np.log(target) - target + 0.5 * np.log(2*torch.pi*target)
-        poisson_nll_b = torch.lgamma(target + 1)
+    def _calculate_poisson_nll(self, input, target, eps=1e-8, factorial_appox="lgamma"):
+        poisson_nll_a = input - target * torch.log(input + eps)
+        if factorial_appox=="stirling":
+            poisson_nll_b = target * torch.log(target+eps) - target + 0.5 * torch.log(2*torch.pi*target+eps)
+            poisson_nll_b = torch.clamp(poisson_nll_b, 0)
+            # poisson_nll_b[target <= 1] = 0
+        elif factorial_appox=="lgamma":
+            poisson_nll_b = torch.lgamma(target + 1)
+        else:
+            raise Exception("factorial_appox not recognised")
         if self.debug:
             print('poisson nll', poisson_nll_a[0,0,0,0], poisson_nll_b[0,0,0,0])
             # print('poisson nll', poisson_nll_a.squeeze(), poisson_nll_b.squeeze(), poisson_nll_a.squeeze() + poisson_nll_b.squeeze())

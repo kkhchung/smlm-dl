@@ -14,7 +14,12 @@ class Augmentation(enum.Enum):
     PIXEL_SHIFT = 1
     NOISE_GAUSSIAN =2
     
-class ImageDataset(Dataset):
+class BaseDataset(Dataset):
+    def __init__(self):
+        super().__init__()
+        self.target_is_image = False
+    
+class SimulatedImageDataset(BaseDataset):
     """
     Base class.
     """
@@ -118,7 +123,7 @@ class ImageDataset(Dataset):
         return image, label
     
 
-class SingleImageDataset(ImageDataset):
+class SingleImageDataset(SimulatedImageDataset):
     """
     Repeatedly sample a single image.
     """
@@ -183,7 +188,7 @@ class SingleImageDataset(ImageDataset):
         return np.abs(shifted_img)
 
 
-class SimulatedPSFDataset(ImageDataset):
+class SimulatedPSFDataset(SimulatedImageDataset):
     def __init__(self, out_size=(32, 32), length=512, dropout_p=0,
                  image_params={},
                  noise_params={'poisson':True, 'gaussian':10},
@@ -307,10 +312,18 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         return psfs
 
 
-class FileWrapperDataset(Dataset):
+class FileWrapperDataset(BaseDataset):
     def __init__(self, file_path, file_loader, slices=(slice(None),), stack_to_volume=False, cache=True):
-        self.file = file_loader(file_path, slices=slices, stack_to_volume=stack_to_volume, cache=cache)
-        print(", ".join(["{}: {}".format(key, val) for key, val in {"filepath":self.file.file_path, "frames":len(self.file), "image shape":self.file[0].shape}.items()]))
+        self.file = self.load_file(file_path, file_loader=file_loader, slices=slices, stack_to_volume=stack_to_volume, cache=cache)
+    
+    def load_file(self, file_path, file_loader, slices, stack_to_volume, cache):
+        file_loaded = file_loader(file_path, slices=slices,
+                                  stack_to_volume=stack_to_volume, cache=cache)
+        print(", ".join(["{}: {}".format(key, val) for key, val in
+                         {"filepath":file_loaded.file_path,
+                          "frames":len(file_loaded),
+                          "image shape":file_loaded[0].shape}.items()]))
+        return file_loaded
     
     def __len__(self):
         return len(self.file)
@@ -343,12 +356,57 @@ class ResamplingFileWrapperDataset(FileWrapperDataset):
         file_id = np.random.randint(0, len(self.file), dtype=np.int32)
         shifts = np.asarray([np.random.randint(0, self.in_size[dim] - self.out_size[dim] + 1) for dim in range(len(self.in_size))])
         
-        labels = {'id':file_id, 'slice_x':shifts[0], 'slice_y':shifts[1], 'slice_z':shifts[2], }
+        labels = {'id':file_id, }
+        labels.update({"slice_{}".format(['x','y','z'][i]): shift for i, shift in enumerate(shifts)})
         
         slicing = np.stack([shifts, shifts + self.out_size], -1)
         slicing = tuple([slice(None),] + [slice(a, b) for (a, b) in slicing])
         
         return self.file[file_id][slicing], labels
+
+
+class FilePairsDataset(FileWrapperDataset):
+    # overlap with SingleImageDataset?
+    def __init__(self, file_path, target_file_path, #out_size=(64, 64, 64),
+                 transform=None, target_transform=None,
+                 image_slice=slice(None),
+                 length=16, #augmentations={},
+                 file_loader=fileloader.PilImageFileLoader,
+                 slices=(slice(None),),
+                 stack_to_volume=False, cache=True):
+        super().__init__(file_path=file_path,
+                         # out_size=out_size, length=length,
+                         file_loader=file_loader, slices=slices,
+                         stack_to_volume=stack_to_volume,
+                         cache=cache)
+        
+        self.target_is_image = True
+        self.length = length
+        self.target_file = self.load_file(target_file_path, file_loader=file_loader,
+                                          slices=slices, stack_to_volume=stack_to_volume, cache=cache)
+        self.transform = transform
+        self.target_transform = target_transform
+        
+        self.image_slice = np.arange(len(self.file), dtype=np.int32)[image_slice]
+        
+    def __len__(self):
+        return self.length
+    
+    def __getitem__(self, key):
+        file_id = np.random.choice(self.image_slice)
+        
+        img = torch.as_tensor(self.file[file_id])
+        target = torch.as_tensor(self.target_file[file_id])
+        
+        seed = np.random.randint(2147483648)
+        if not self.transform is None:
+            torch.manual_seed(seed)
+            img = self.transform(img)
+        if not self.target_transform is None:
+            torch.manual_seed(seed)
+            target = self.transform(target)
+        
+        return img, target
 
 
 def inspect_images(dataset, indices=None):
@@ -363,23 +421,36 @@ def inspect_images(dataset, indices=None):
     plt.colorbar(im, ax=axes[0])
     im = axes[1].imshow(np.log(tiled_images))
     plt.colorbar(im, ax=axes[1])
+    axes_to_label = [axes,]
+    
+    if dataset.target_is_image is True:
+        tiled_images, n_col, n_row  = util.tile_images(util.reduce_images_dim(np.stack(labels, axis=0)), full_output=True)
+        fig, axes = plt.subplots(2, 1, figsize=(4*n_col, 3*n_row*2))
+        im = axes[0].imshow(tiled_images)
+        plt.colorbar(im, ax=axes[0])
+        im = axes[1].imshow(np.log(tiled_images))
+        plt.colorbar(im, ax=axes[1])
+        axes_to_label.append(axes)
     
     for i, id in enumerate(indices):
         label = "{}:\t".format(id)
-        for key, val in labels[i].items():
-            label += " [{} =".format(key)
-            for datum in np.atleast_1d(val.squeeze()):
-                label += " {:.3f},".format(datum)
-            label += "],"
+        if dataset.target_is_image is False:
+            for key, val in labels[i].items():
+                label += " [{} =".format(key)
+                for datum in np.atleast_1d(val.squeeze()):
+                    label += " {:.3f},".format(datum)
+                label += "],"
         print(label)
-        for j in range(2):
-            axes[j].text(i%n_col / n_col, i//n_col / n_row,
-                         # label,
-                         id,
-                         bbox={'facecolor':'white', 'alpha':1},
-                         ha='left', va='bottom',
-                         fontsize='medium',
-                         transform=axes[j].transAxes)
+        
+        for axes in axes_to_label:
+            for j in range(2):
+                axes[j].text(i%n_col / n_col, i//n_col / n_row,
+                             # label,
+                             id,
+                             bbox={'facecolor':'white', 'alpha':1},
+                             ha='left', va='bottom',
+                             fontsize='medium',
+                             transform=axes[j].transAxes)
             
     if hasattr(dataset, 'params'):
         fig, axes = plt.subplots(1, len(dataset.params), figsize=(4*len(dataset.params), 3))

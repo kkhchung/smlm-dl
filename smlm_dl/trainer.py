@@ -91,6 +91,8 @@ class FittingTrainer(object):
                     n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
                     self.log_images_to_tensorboard(tb_logger, "Training", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
                     self.log_params_to_tensorboard(tb_logger, "Training", n_iter, y, self.model.mapped_params)
+                    if self.train_data_loader.dataset.target_is_image is True:
+                        self.log_images_to_tensorboard(tb_logger, "Training/Ref", n_iter, loss, y[:tb_log_limit_images], pred[:tb_log_limit_images])
                     
             _t.set_postfix(train_loss=loss.detach().numpy())
         
@@ -116,15 +118,16 @@ class FittingTrainer(object):
                 pred = self.model.call_auto(x, y)
                 sum_loss += self.loss_function(pred, x)                
                 
-                for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:
-                    for key, val in new_dict.items():
-                        if key in old_dict:
-                            if val.ndim > 0:
-                                old_dict[key] = torch.cat([old_dict[key], val])
+                if self.model.encoder.image_input is False:
+                    for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:
+                        for key, val in new_dict.items():
+                            if key in old_dict:
+                                if val.ndim > 0:
+                                    old_dict[key] = torch.cat([old_dict[key], val])
+                                else:
+                                    old_dict[key] = val # should be identical to the old value
                             else:
-                                old_dict[key] = val # should be identical to the old value
-                        else:
-                            old_dict[key] = val
+                                old_dict[key] = val
         
         loss = sum_loss / len(self.valid_data_loader)
         
@@ -135,6 +138,8 @@ class FittingTrainer(object):
         if not tb_logger is None:
             self.log_images_to_tensorboard(tb_logger, "Validate", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
             self.log_params_to_tensorboard(tb_logger, "Validate", n_iter, y_params, pred_params)
+            if self.valid_data_loader.dataset.target_is_image is True:
+                self.log_images_to_tensorboard(tb_logger, "Validate/Ref", n_iter, loss, y[:tb_log_limit_images], pred[:tb_log_limit_images])
         
         if show_images:
             img_limit = 16

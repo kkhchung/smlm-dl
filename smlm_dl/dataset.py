@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import enum
 import scipy
 from scipy import ndimage, signal
-import fileloader, io, util, zernike
+from . import fileloader, util, zernike
 from skimage import restoration
 
 @enum.unique
@@ -314,6 +314,7 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
 
 class FileWrapperDataset(BaseDataset):
     def __init__(self, file_path, file_loader, slices=(slice(None),), stack_to_volume=False, cache=True):
+        super().__init__()
         self.file = self.load_file(file_path, file_loader=file_loader, slices=slices, stack_to_volume=stack_to_volume, cache=cache)
     
     def load_file(self, file_path, file_loader, slices, stack_to_volume, cache):

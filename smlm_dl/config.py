@@ -1,8 +1,8 @@
 from configparser import ConfigParser
-import socket
+import os, socket
 
 class Configure(ConfigParser):
-    config_filepath = "config.ini"
+    config_filepath = os.path.join(os.path.dirname(__file__), "config.ini")
     def __init__(self):
         defaults = {"LOG_PATH": {"run": r".\runs",},
                     "ID": {"computer": socket.gethostname(),},

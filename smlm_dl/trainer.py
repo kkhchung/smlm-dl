@@ -15,7 +15,7 @@ import numpy as np
 import matplotlib
 from matplotlib import pyplot as plt
 
-import util, config
+from . import util, config
 
 from tqdm.auto import tqdm, trange
     

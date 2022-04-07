@@ -5,7 +5,7 @@ import numpy as np
 import torch
 from torch import nn
 
-import model
+from . import model
 
 class CameraLoss(nn.Module):
     def __init__(self, mle, gain=1, offset=100):

@@ -3,8 +3,8 @@ import numpy as np
 import torch
 from torch import nn
 
+from .. import util
 from . import base
-import util
 
 
 class BaseEncoderModel(base.BaseModel):
@@ -40,7 +40,8 @@ class IdEncoderModel(BaseEncoderModel):
         if not init_weights is None:
             with torch.no_grad():
                 init_weights = torch.as_tensor(init_weights)
-                init_weights = init_weights.unsqueeze(0).expand([self.num_img]+[-1,]*init_weights.ndim)
+                if np.all(init_weights.shape==np.prod(internal_shape)):
+                    init_weights = init_weights.unsqueeze(-1).expand([-1,]*init_weights.ndim + [self.num_img])
                 self.encoders["scale"].weight.view(-1).copy_(init_weights.reshape(-1))
         print('need slicing: {}'.format(self.need_slicing))
         if self.need_slicing is True:

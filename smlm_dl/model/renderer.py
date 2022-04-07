@@ -5,7 +5,9 @@ from torch import nn
 
 from tqdm.auto import tqdm, trange
 
-import simulate, spline, util, zernike
+import skimage
+
+from .. import simulate, spline, util, zernike
 from . import base
 
 
@@ -274,7 +276,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
         return pupil_magnitude, pupil_phase, pupil_prop
     
     def _substract_tilt_tip_defocus(self, pupil_phase):
-        pupil_phase_masked = restoration.unwrap_phase(np.fmod(np.ma.array(pupil_phase.detach().numpy(), mask=~self.mask), np.pi))
+        pupil_phase_masked = skimage.restoration.unwrap_phase(np.fmod(np.ma.array(pupil_phase.detach().numpy(), mask=~self.mask), np.pi))
         diff = pupil_phase_masked.filled(0) - pupil_phase.detach().numpy()
         diff[~self.mask] = 0
         ret = pupil_phase + torch.as_tensor(diff, dtype=torch.float)

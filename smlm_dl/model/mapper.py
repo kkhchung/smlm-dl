@@ -3,7 +3,7 @@ import numpy as np
 import torch
 from torch import nn
 
-import model, util, zernike
+from .. import model, util, zernike
 from . import base, encoder, renderer
 
 

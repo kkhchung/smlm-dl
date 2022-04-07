@@ -4,7 +4,7 @@ from matplotlib import pyplot as plt
 import torch
 from torch import nn
 
-import util
+from .. import util
 
 
 class BaseModel(nn.Module):

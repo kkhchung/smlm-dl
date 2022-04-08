@@ -41,8 +41,8 @@ class BaseFitModel(base.BaseModel):
         x = self.renderer(x, batch_size)
         return x
     
-    def render_example_images(self, num):
-        mapped_params = self.mapper.get_random_mapped_params(num)
+    def render_example_images(self, num, device=None):
+        mapped_params = self.mapper.get_random_mapped_params(num, device)
         images = self.renderer.render_images(mapped_params, num, True)
         return images
     

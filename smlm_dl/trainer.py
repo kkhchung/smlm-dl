@@ -94,7 +94,7 @@ class FittingTrainer(object):
                     if self.train_data_loader.dataset.target_is_image is True:
                         self.log_images_to_tensorboard(tb_logger, "Training/Ref", n_iter, loss, y[:tb_log_limit_images], pred[:tb_log_limit_images])
                     
-            _t.set_postfix(train_loss=loss.detach().numpy())
+            _t.set_postfix(train_loss=loss.detach().cpu().numpy())
         
         if t is None:
             _t.close()
@@ -143,8 +143,8 @@ class FittingTrainer(object):
         
         if show_images:
             img_limit = 16
-            x_numpy = x[:img_limit].detach().numpy().mean(axis=1, keepdims=True)
-            pred_numpy = pred[:img_limit].detach().numpy().mean(axis=1, keepdims=True)
+            x_numpy = x[:img_limit].detach().cpu().numpy().mean(axis=1, keepdims=True)
+            pred_numpy = pred[:img_limit].detach().cpu().numpy().mean(axis=1, keepdims=True)
             vmin = min(x_numpy.min(), pred_numpy.min())
             vmax = max(x_numpy.max(), pred_numpy.max())
             
@@ -199,7 +199,7 @@ class FittingTrainer(object):
                 if (not self.valid_data_loader is None) and (((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch)):
                     validation_loss = self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger,
                                                     show_images=(epoch_i+1)==n_epoch, tb_log_limit_images=tb_log_limit_images)
-                    t0.set_postfix(val_loss=validation_loss.detach().numpy())
+                    t0.set_postfix(val_loss=validation_loss.detach().cpu().numpy())
 
                 if ((epoch_i+1) % checkpoint_interval == 0) or ((epoch_i+1)==n_epoch):
                     self.save_checkpoint()
@@ -207,9 +207,9 @@ class FittingTrainer(object):
                 
     def log_images_to_tensorboard(self, tb_logger, label, n_iter, loss, x, pred):
         tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)
-        x_numpy = x.detach().numpy()
+        x_numpy = x.detach().cpu().numpy()
         x_numpy = util.reduce_images_dim(x_numpy, 'skip')
-        pred_numpy = pred.detach().numpy()
+        pred_numpy = pred.detach().cpu().numpy()
         pred_numpy = util.reduce_images_dim(pred_numpy, 'skip')
         vmin = min(x_numpy.min(), pred_numpy.min())
         vmax = max(x_numpy.max(), pred_numpy.max())
@@ -234,8 +234,8 @@ class FittingTrainer(object):
     def log_params_to_tensorboard(self, tb_logger, label, n_iter, y, pred, params=['x','y','z']):
         for param in params:
             if param in pred and param in y:
-                param_y = y[param].squeeze().detach()
-                param_pred = torch.as_tensor(pred[param]).squeeze().detach()
+                param_y = y[param].squeeze().detach().to(self.device)
+                param_pred = torch.as_tensor(pred[param], device=self.device).squeeze().detach()                
                 if param_y.ndim > 1 or param_pred.ndim > 1:
                     # estimate of error based on nearest neighbour
                     for i in range(3 - param_y.ndim):
@@ -271,11 +271,12 @@ class FittingTrainer(object):
                 print("{}: {}".format(key, val))
         
     def load_checkpoint(self, filepath):
-        checkpoint = torch.load(filepath)
+        checkpoint = torch.load(filepath, map_location=self.device)
         
         self.model.load_state_dict(checkpoint.get("model_state_dict"))
-        self.optimizer.load_state_dict(checkpoint.get("optimizer_state_dict"))
+        self.model = self.model.to(self.device)
         self.loss_function.load_state_dict(checkpoint.get("loss_function_state_dict"))
+        self.optimizer.load_state_dict(checkpoint.get("optimizer_state_dict"))
         
         print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))
         print(summary(self.model))

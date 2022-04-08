@@ -72,13 +72,14 @@ class BaseMapperModel(base.BaseModel):
         if len(self.cached_images) > 0:
             images = {}
             for key, val in self.cached_images.items():
-                images[key] = util.color_images(util.tile_images(val[:9], 3), full_output=True)
+                images[key] = util.color_images(util.tile_images(val[:9].cpu().numpy(), 3), full_output=True)
             ret['images'] = images
         return ret
     
-    def get_random_mapped_params(self, batch_size):
+    def get_random_mapped_params(self, batch_size, device=None):
         # x = (torch.rand((batch_size, self.in_channels, self.img_size[0], self.img_size[1])) - 0.5) * 2
         x = (torch.rand((batch_size, self.in_channels, 1, 1)) - 0.5) * 2
+        x = x.to(device=device)        
         x = self.forward(x)
         return x
 
@@ -145,6 +146,7 @@ class CentroidMapperModel(BaseMapperModel):
     def setup_mappings(self, fit_params, max_psf_count):
         if any(param in fit_params for param in ['A', 'x', 'y']):
             centroid_module = Centroid(self.img_size)
+            self.centroid_module = centroid_module
             centroid_module.register_forward_hook(self.save_input_image)
             self.mappings.append((max_psf_count,
                                   nn.Sequential(nn.ReLU(),
@@ -212,7 +214,7 @@ class StackedConvMapper(BaseMapperModel):
                                                        Average()),
                                          [[param_key,], [repeats,]]))
             else:
-                self.mapped_params[param_key] = torch.as_tensor(param_val.default, dtype=torch.float32)
+                self.mapped_params[param_key] = torch.as_tensor(param_val.default, dtype=torch.float32)                
             self.in_channels += repeats
         
         in_channels = 8 * len(per_channel_params)
@@ -247,13 +249,14 @@ class DirectImageMapperModel(DirectMapperModel):
         params_ref.update(new_params_ref)
         return params_ref
         
-    def get_random_mapped_params(self, batch_size):
+    def get_random_mapped_params(self, batch_size, device=None):
         x = (torch.rand((batch_size, self.in_channels, *self.img_size)) - 0.5) * 2
+        x = x.to(device=device)        
         x = self.forward(x)
         return x
     
     def save_output_image(self, module, input, output, label="noname"):
-        self.cached_images[label] = util.reduce_images_dim(output.detach().numpy())
+        self.cached_images[label] = util.reduce_images_dim(output.detach())
 
 
 class OffsetScale(nn.Module):

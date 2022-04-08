@@ -31,7 +31,7 @@ class BaseRendererModel(base.BaseModel):
         images = self._render_images(params, batch_size)
         images = images.sum(dim=1, keepdim=True)
         if as_numpy_array:
-            images = images.detach().numpy()
+            images = images.detach().cpu().numpy()
         return images
         
     def _render_images(self, params, batch_size):
@@ -159,15 +159,15 @@ class Template2DRenderer(BaseRendererModel):
     def get_suppl(self, colored=False):
         res = {'images': {},
                }
-        template = self._calculate_template(True).detach().numpy()
-        template_2x = self._calculate_template(False).detach().numpy()
+        template = self._calculate_template(True).detach().cpu().numpy()
+        template_2x = self._calculate_template(False).detach().cpu().numpy()
         if colored:
             template = util.color_images(template, full_output=True)
             template_2x = util.color_images(template_2x, full_output=True)
         res['images'].update({'template':template, 'template 2x':template_2x, })
         
         if not self.conv is None:
-            conv_kernel = self.conv(None).detach().numpy()[0,0]
+            conv_kernel = self.conv(None).detach().cpu().numpy()[0,0]
             conv_kernel = util.color_images(conv_kernel, full_output=True)
             res['images']['conv'] = conv_kernel
         return res
@@ -198,7 +198,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
                 # nn.Dropout(p=0.25),
             )
         else:
-            self.pupil_magnitude = pupil_magnitude
+            self.register_buffer('pupil_magnitude', pupil_magnitude)
             
         pupil_phase = torch.zeros((self.img_size[0], self.img_size[1]))
         nn.init.xavier_normal_(pupil_phase, 0.1)
@@ -223,8 +223,8 @@ class FourierOptics2DRenderer(BaseRendererModel):
                 nn.Identity(),
                 # nn.Dropout(p=0.25),
             )
-        else:
-            self.pupil_prop = pupil_prop
+        else:            
+            self.register_buffer('pupil_prop', pupil_prop)
             
         pupil_padding_factor = 4
         pupil_padding_clip = 0.5 * (pupil_padding_factor - 1)
@@ -240,7 +240,7 @@ class FourierOptics2DRenderer(BaseRendererModel):
     
     def _render_images(self, mapped_params, batch_size, ):
         pupil_magnitude, pupil_phase, pupil_prop = self._calculate_pupil()
-        pupil_phase = pupil_phase[None,...] * torch.ones([batch_size,]+[1,]*3)
+        pupil_phase = pupil_phase[None,...] * torch.ones([batch_size,]+[1,]*3, device=pupil_phase.device)
         
         pupil_magnitude = nn.functional.pad(pupil_magnitude, self.pupil_padding, mode='constant')
         pupil_phase = nn.functional.pad(pupil_phase, self.pupil_padding, mode='constant')
@@ -276,8 +276,8 @@ class FourierOptics2DRenderer(BaseRendererModel):
         return pupil_magnitude, pupil_phase, pupil_prop
     
     def _substract_tilt_tip_defocus(self, pupil_phase):
-        pupil_phase_masked = skimage.restoration.unwrap_phase(np.fmod(np.ma.array(pupil_phase.detach().numpy(), mask=~self.mask), np.pi))
-        diff = pupil_phase_masked.filled(0) - pupil_phase.detach().numpy()
+        pupil_phase_masked = skimage.restoration.unwrap_phase(np.fmod(np.ma.array(pupil_phase.detach().cpu().numpy(), mask=~self.mask), np.pi))
+        diff = pupil_phase_masked.filled(0) - pupil_phase.detach().cpu().numpy()
         diff[~self.mask] = 0
         ret = pupil_phase + torch.as_tensor(diff, dtype=torch.float)
         pupil_phase_masked = torch.as_tensor(pupil_phase_masked.data[self.mask], dtype=torch.float)
@@ -292,11 +292,11 @@ class FourierOptics2DRenderer(BaseRendererModel):
     
     def get_suppl(self, colored=False):
         pupil_magnitude, pupil_phase, pupil_prop = self._calculate_pupil()
-        pupil_magnitude = pupil_magnitude.detach().numpy()
-        pupil_phase = pupil_phase.detach().numpy()
-        pupil_prop = pupil_prop.detach().numpy()
+        pupil_magnitude = pupil_magnitude.detach().cpu().numpy()
+        pupil_phase = pupil_phase.detach().cpu().numpy()
+        pupil_prop = pupil_prop.detach().cpu().numpy()
         
-        zern_coeffs = zernike.fit_zernike_from_pupil(pupil_magnitude*np.exp(1j*pupil_phase), 16, self.R, np.arctan2(self.US, self.VS))
+        zern_coeffs = zernike.fit_zernike_from_pupil(pupil_magnitude*np.exp(1j*pupil_phase), 16, self.R.detach().cpu().numpy(), torch.atan2(self.US, self.VS).detach().cpu().numpy())
         zern_plot = functools.partial(zernike.plot_zernike_coeffs, zernike_coeffs=zern_coeffs)
         
         if colored:
@@ -405,8 +405,8 @@ class Spline2DRenderer(BaseRendererModel):
     def get_suppl(self, colored=False):
         res = {'images': {},
                }
-        template = self.render(1).detach().numpy()
-        template_2x = self.render(2).detach().numpy()
+        template = self.render(1).detach().cpu().numpy()
+        template_2x = self.render(2).detach().cpu().numpy()
         if colored:
             template = util.color_images(template, full_output=True)
             template_2x = util.color_images(template_2x, full_output=True)
@@ -434,8 +434,8 @@ class Spline2DRenderer(BaseRendererModel):
             optimizer.zero_grad()
             pred = self._render_images(x, raw=True)
             loss = loss_function(pred[0,0,:,:], image_groundtruth)
-            loss_log.append(loss.detach().numpy())
-            _t.set_postfix(loss=loss.detach().numpy())
+            loss_log.append(loss.detach().cpu().numpy())
+            _t.set_postfix(loss=loss.detach().cpu().numpy())
             _t.update(1)
             
             if (loss < r2_threshold):
@@ -563,7 +563,7 @@ class Spline3DRenderer(BaseRendererModel):
     def get_suppl(self, colored=False):
         res = {'images': {},
                }
-        template = self.render(1).detach().numpy()
+        template = self.render(1).detach().cpu().numpy()
         if colored:
             template_xy = util.color_images(template[:,:,template.shape[2]//2], full_output=True)
             template_xz = util.color_images(template[:,template.shape[1]//2,:], full_output=True)
@@ -596,8 +596,8 @@ class Spline3DRenderer(BaseRendererModel):
             pred = pred.mean(axis=1)
             pred = pred.moveaxis(0, -1)
             loss = loss_function(pred, volume_groundtruth)
-            loss_log.append(loss.detach().numpy())
-            _t.set_postfix(loss=loss.detach().numpy())
+            loss_log.append(loss.detach().cpu().numpy())
+            _t.set_postfix(loss=loss.detach().cpu().numpy())
             _t.update(1)
             
             if (loss < r2_threshold):
@@ -622,7 +622,7 @@ class PassthroughRenderer(BaseRendererModel):
     def render_images(self, params, batch_size, as_numpy_array=False):
         images = torch.cat([param for param in params.values() if param.ndim > 1], axis=1)
         if as_numpy_array:
-            images = images.detach().numpy()
+            images = images.detach().cpu().numpy()
         return images
 
 
@@ -680,7 +680,7 @@ class ConvolutionRenderer(BaseRendererModel):
         kernel = torch.fft.ifftn(self.kernel_fft,  dim=(2,3,4)).abs()[0,0]
         kernel = torch.fft.ifftshift(kernel)
         # kernel = torch.log10(kernel)
-        kernel = kernel.detach().numpy()
+        kernel = kernel.detach().cpu().numpy()
         kernel_xy = kernel[:,:,kernel.shape[2]//2]
         kernel_xz = kernel[:,kernel.shape[1]//2,:]
         if colored:

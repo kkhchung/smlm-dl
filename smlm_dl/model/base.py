@@ -7,7 +7,7 @@ from torch import nn
 from .. import util
 
 
-class BaseModel(nn.Module):
+class BaseModel(nn.Module):        
     def call_auto(self, x, y=None):
         # 'smart' call that workers for both id / image type encoder
         if y is None:
@@ -22,7 +22,7 @@ class BaseModel(nn.Module):
                         y_out.append(y[dim])
                     else:
                         break
-                y_out = torch.stack(y_out, axis=1)
+                y_out = torch.stack(y_out, axis=1).to(x.device)
                 
                 pred = nn.Module.__call__(self, y_out)
             return pred
@@ -77,15 +77,21 @@ class FitParameter(object):
         return text
 
 
-def check_model(model, dataloader=None, n_images=8):
+def check_model(model, dataloader=None, n_images=8, try_cuda=True):
+    device = torch.device('cuda') if try_cuda and torch.cuda.is_available() else torch.device('cpu')
+    
+    model.to(device)
     is_training = model.training
     model.train(False)
     
     if not dataloader is None:
         features, labels = next(iter(dataloader))
+        features = features.to(device)
+        if torch.is_tensor(labels):
+            labels.to(device)
         pred = model.call_auto(features, labels)
-        pred = pred.detach().numpy()
-        features = features.detach().numpy()
+        pred = pred.detach().cpu().numpy()
+        features = features.detach().cpu().numpy()
         
         print("input shape: {}, output_shape: {}".format(features.shape, pred.shape))
         
@@ -132,7 +138,7 @@ def check_model(model, dataloader=None, n_images=8):
                 val['plot'](ax)
                 
     if hasattr(model, 'render_example_images'):
-        example_images = model.render_example_images(8)
+        example_images = model.render_example_images(8, device)
         example_images = util.reduce_images_dim(example_images)
         fig, axes = plt.subplots(1, len(example_images), figsize=(4*len(example_images), 3), squeeze=False)
         for i, img in enumerate(example_images):

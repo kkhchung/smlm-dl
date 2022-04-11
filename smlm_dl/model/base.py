@@ -138,7 +138,7 @@ def check_model(model, dataloader=None, n_images=8, try_cuda=True):
                 val['plot'](ax)
                 
     if hasattr(model, 'render_example_images'):
-        example_images = model.render_example_images(8, device)
+        example_images = model.render_example_images(n_images, device)
         example_images = util.reduce_images_dim(example_images)
         fig, axes = plt.subplots(1, len(example_images), figsize=(4*len(example_images), 3), squeeze=False)
         for i, img in enumerate(example_images):

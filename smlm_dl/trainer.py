@@ -55,7 +55,6 @@ class FittingTrainer(object):
         print("Device: {}".format(self.device))
         
     def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=9, t=None):
-        self.model.to(self.device)
         self.model.train()
         
         # print("-"*100)
@@ -105,7 +104,6 @@ class FittingTrainer(object):
         self.current_state['loss'] = loss
                 
     def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=9, show_images=True):
-        self.model.to(self.device)
         self.model.eval()
         
         sum_loss = 0
@@ -182,7 +180,10 @@ class FittingTrainer(object):
         self.set_logpath(label)
         
         if tb_logger is True:
-            tb_logger = SummaryWriter(log_dir=self.current_state["log_path"])
+            tb_logger = SummaryWriter(log_dir=self.current_state["log_path"])            
+            
+        self.model.to(self.device)
+        self.loss_function.to(self.device)
         
         if True: # always pickle the model on running
             self.save_model()
@@ -274,8 +275,9 @@ class FittingTrainer(object):
         checkpoint = torch.load(filepath, map_location=self.device)
         
         self.model.load_state_dict(checkpoint.get("model_state_dict"))
-        self.model = self.model.to(self.device)
+        self.model.to(self.device)
         self.loss_function.load_state_dict(checkpoint.get("loss_function_state_dict"))
+        self.loss_function.to(self.device)
         self.optimizer.load_state_dict(checkpoint.get("optimizer_state_dict"))
         
         print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))

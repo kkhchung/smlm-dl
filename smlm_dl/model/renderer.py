@@ -276,11 +276,11 @@ class FourierOptics2DRenderer(BaseRendererModel):
         return pupil_magnitude, pupil_phase, pupil_prop
     
     def _substract_tilt_tip_defocus(self, pupil_phase):
-        pupil_phase_masked = skimage.restoration.unwrap_phase(np.fmod(np.ma.array(pupil_phase.detach().cpu().numpy(), mask=~self.mask), np.pi))
-        diff = pupil_phase_masked.filled(0) - pupil_phase.detach().cpu().numpy()
+        pupil_phase_masked = skimage.restoration.unwrap_phase(np.fmod(np.ma.array(pupil_phase.detach().cpu().numpy(), mask=~self.mask.detach().cpu().numpy()), np.pi))        
+        diff = torch.as_tensor(pupil_phase_masked.filled(0), device=pupil_phase.device) - pupil_phase
         diff[~self.mask] = 0
-        ret = pupil_phase + torch.as_tensor(diff, dtype=torch.float)
-        pupil_phase_masked = torch.as_tensor(pupil_phase_masked.data[self.mask], dtype=torch.float)
+        ret = pupil_phase + torch.as_tensor(diff, dtype=torch.float, device=pupil_phase.device)
+        pupil_phase_masked = torch.as_tensor(pupil_phase_masked.data[self.mask.detach().cpu().numpy()], dtype=torch.float, device=pupil_phase.device)
         for basis in [self.zern_defocus, self.zern_tip, self.zern_tilt]:
             res = torch.linalg.lstsq(basis[self.mask].reshape(-1, 1), pupil_phase_masked.reshape(-1, 1))[0]
             pred = basis * res
@@ -311,8 +311,10 @@ class FourierOptics2DRenderer(BaseRendererModel):
     
 class Spline2DRenderer(BaseRendererModel):
     
-    def __init__(self, img_size, fit_params, k=3, template_init=None):
+    def __init__(self, img_size, fit_params, k=3, template_init=None, try_cuda=True):
         super().__init__(img_size, fit_params)
+        
+        self.device = torch.device('cuda') if try_cuda and torch.cuda.is_available() else torch.device('cpu')
         
         self.k = k
         self.out_size = img_size
@@ -322,7 +324,7 @@ class Spline2DRenderer(BaseRendererModel):
             # nn.init.xavier_uniform_(noise, 0.1)
             # template_init = template_init + noise
         
-        coeffs = torch.tensor(template_init, dtype=torch.float)
+        coeffs = torch.tensor(template_init, dtype=torch.float, device=self.device)
         self.template_size = coeffs.shape
         
         self.padding = 4
@@ -334,8 +336,8 @@ class Spline2DRenderer(BaseRendererModel):
         if (any(val<0 for val in self.centering_offset)):
             raise Exception("Out_size must be larger than size of image. Limitation of using torch.scatter.")
             
-        index_a = torch.arange(self.template_size[1]+1).tile(self.template_size[0]+1, 1)
-        index_b = torch.arange(self.out_size[0]+2)[:,None].tile(1, self.out_size[1]+2)
+        index_a = torch.arange(self.template_size[1]+1, device=self.device).tile(self.template_size[0]+1, 1)
+        index_b = torch.arange(self.out_size[0]+2, device=self.device)[:,None].tile(1, self.out_size[1]+2)
         self.register_buffer('index_a', index_a)
         self.register_buffer('index_b', index_b)
         
@@ -350,7 +352,7 @@ class Spline2DRenderer(BaseRendererModel):
         if raw:
             return template
         
-        x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2))
+        x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2), device=self.device)
         
         index = self.index_a.unsqueeze(0).unsqueeze(0) \
                 + shift_pixel['y'] \
@@ -385,8 +387,8 @@ class Spline2DRenderer(BaseRendererModel):
         return x
     
     def render(self, scale=1):
-        x = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
-        y = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
+        x = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32, device=self.device)
+        y = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32, device=self.device)
         xs, ys = torch.meshgrid(x, y, indexing='ij')
 
         x = {'x': xs.flatten()[:,None,None,None],
@@ -415,15 +417,15 @@ class Spline2DRenderer(BaseRendererModel):
         return res
     
     def fit_image(self, image_groundtruth, rel_lr=1e-1, maxiter=100, r2_tol=1e-3):
-        image_groundtruth = torch.as_tensor(image_groundtruth).type(torch.float32)
+        image_groundtruth = torch.as_tensor(image_groundtruth, device=self.device).type(torch.float32)
         image_groundtruth = nn.functional.pad(image_groundtruth, (0,1,0,1))
         loss_function = nn.MSELoss()
         optimizer = torch.optim.Adam(self.parameters(), lr=rel_lr*image_groundtruth.max(), amsgrad=False)
         
-        x = {'x':torch.zeros((1,1,1,1)),
-             'y':torch.zeros((1,1,1,1))}
+        x = {'x':torch.zeros((1,1,1,1), device=self.device),
+             'y':torch.zeros((1,1,1,1), device=self.device)}
         
-        mask = torch.ones(self.coeffs.shape, dtype=torch.bool)
+        mask = torch.ones(self.coeffs.shape, dtype=torch.bool, device=self.device)
         mask[self.padding:-self.padding,self.padding:-self.padding] = False
         
         r2_threshold = image_groundtruth.var() * r2_tol
@@ -446,7 +448,7 @@ class Spline2DRenderer(BaseRendererModel):
             optimizer.step()
             self.coeffs.data.masked_fill_(mask, 0)
             
-        r2 = 1 - loss_log[-1] / image_groundtruth.var()
+        r2 = 1 - loss_log[-1] / image_groundtruth.var().detach().cpu().numpy()
         print("Final loss: {:.3f}\tR2: {:.3f}".format(loss_log[-1], r2))
         if loss_log[-1] > 1 and r2 < 0.9:
             print("Not well fitted.")
@@ -455,8 +457,10 @@ class Spline2DRenderer(BaseRendererModel):
     
 class Spline3DRenderer(BaseRendererModel):
     
-    def __init__(self, img_size, fit_params, k=3, template_init=None):
+    def __init__(self, img_size, fit_params, k=3, template_init=None, try_cuda=True):
         super().__init__(img_size, fit_params)
+        
+        self.device = torch.device('cuda') if try_cuda and torch.cuda.is_available() else torch.device('cpu')
         
         self.k = k
         self.out_size = img_size
@@ -466,7 +470,7 @@ class Spline3DRenderer(BaseRendererModel):
             # nn.init.xavier_uniform_(noise, 0.1)
             # template_init = template_init + noise
         
-        coeffs = torch.tensor(template_init, dtype=torch.float)
+        coeffs = torch.tensor(template_init, dtype=torch.float, device=self.device)
         self.template_size = coeffs.shape
         
         self.padding = 4
@@ -480,8 +484,8 @@ class Spline3DRenderer(BaseRendererModel):
         if (any(val<0 for val in self.centering_offset)):
             raise Exception("Out_size must be larger than size of image. Limitation of using torch.scatter.")
             
-        index_a = torch.arange(self.template_size[1]+1).tile(self.template_size[0]+1, 1)
-        index_b = torch.arange(self.out_size[0]+2)[:,None].tile(1, self.out_size[1]+2)
+        index_a = torch.arange(self.template_size[1]+1, device=self.device).tile(self.template_size[0]+1, 1)
+        index_b = torch.arange(self.out_size[0]+2, device=self.device)[:,None].tile(1, self.out_size[1]+2)
         self.register_buffer('index_a', index_a)
         self.register_buffer('index_b', index_b)
         
@@ -496,7 +500,7 @@ class Spline3DRenderer(BaseRendererModel):
         if raw:
             return template
         
-        x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2))
+        x_a = torch.zeros((shift_pixel['y'].shape[0], shift_pixel['y'].shape[1], self.out_size[0]+2, self.out_size[1]+2), device=self.device)
         
         index = self.index_a.unsqueeze(0).unsqueeze(0) \
                 + shift_pixel['y'] \
@@ -519,7 +523,7 @@ class Spline3DRenderer(BaseRendererModel):
         return x
     
     def _calculate_template(self, shifts_subpixel, shift_pixel_z):
-        index = torch.arange(4).tile(*shift_pixel_z.shape[:2], *self.coeffs.shape[:2], 1) + self.offset + shift_pixel_z.unsqueeze(-1)
+        index = torch.arange(4, device=self.device).tile(*shift_pixel_z.shape[:2], *self.coeffs.shape[:2], 1) + self.offset + shift_pixel_z.unsqueeze(-1)
         index = torch.clamp(index, 0, self.coeffs.shape[2]-1)
 
         coeffs = self.coeffs.tile(*shift_pixel_z.shape[:2], 1, 1, 1)
@@ -540,9 +544,9 @@ class Spline3DRenderer(BaseRendererModel):
         return x
     
     def render(self, scale=1):
-        x = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
-        y = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32)
-        z = torch.arange(0, self.template_size[2], 1/scale) - self.centering_offset[2]
+        x = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32, device=self.device)
+        y = torch.as_tensor(np.arange(0, 1, 1/scale)[::-1].copy(), dtype=torch.float32, device=self.device)
+        z = torch.arange(0, self.template_size[2], 1/scale, device=self.device) - self.centering_offset[2]
         
         xs, ys, zs = torch.meshgrid(x, y, z, indexing='ij')
 
@@ -572,18 +576,18 @@ class Spline3DRenderer(BaseRendererModel):
         return res
     
     def fit_image(self, volume_groundtruth, rel_lr=1e-2, maxiter=50, r2_tol=1e-3):
-        volume_groundtruth = torch.as_tensor(volume_groundtruth).type(torch.float32)
+        volume_groundtruth = torch.as_tensor(volume_groundtruth, dtype=torch.float32, device=self.device)
         volume_groundtruth = nn.functional.pad(volume_groundtruth, (0,0,0,1,0,1))
         
         loss_function = nn.MSELoss()
         optimizer = torch.optim.Adam(self.parameters(), lr=rel_lr*volume_groundtruth.max(), amsgrad=False)
         
-        x = {'x':torch.zeros((1,1,1,1)),
-             'y':torch.zeros((1,1,1,1)),
-             'z':torch.arange(volume_groundtruth.shape[2]).reshape(-1,1,1,1) - self.centering_offset[2],
+        x = {'x':torch.zeros((1,1,1,1), device=self.device),
+             'y':torch.zeros((1,1,1,1), device=self.device),
+             'z':torch.arange(volume_groundtruth.shape[2], device=self.device).reshape(-1,1,1,1) - self.centering_offset[2],
             }
         
-        mask = torch.ones(self.coeffs.shape, dtype=torch.bool)
+        mask = torch.ones(self.coeffs.shape, dtype=torch.bool, device=self.device)
         mask[self.padding:-self.padding,self.padding:-self.padding] = False
 
         r2_threshold = volume_groundtruth.var() * r2_tol
@@ -608,7 +612,7 @@ class Spline3DRenderer(BaseRendererModel):
             optimizer.step()
             self.coeffs.data.masked_fill_(mask, 0)
             
-        r2 = 1 - loss_log[-1] / volume_groundtruth.var()
+        r2 = 1 - loss_log[-1] / volume_groundtruth.var().detach().cpu().numpy()
         print("Final loss: {:.3f}\tR2: {:.3f}".format(loss_log[-1], r2))
         if loss_log[-1] > 1 and r2 < 0.9:
             print("Not well fitted.")

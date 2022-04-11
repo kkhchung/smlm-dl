@@ -1,5 +1,6 @@
 import numpy as np
 import matplotlib
+import torch
 
 def color_images(img, cmap=None, vmin=None, vmax=None, vsym=False, full_output=False):
     # convert N, 1, H, W data to N, C, H, W
@@ -62,9 +63,15 @@ def reduce_images_dim(images, ch_func="mean", out_dim=3, dim_func="max"):
     extra_dim = images.ndim - out_dim
     extra_dim = tuple(np.arange(-extra_dim, 0, 1))
     if dim_func == "mean":
-        images = images.mean(axis=extra_dim)
+        if isinstance(images, torch.Tensor):
+            images = images.mean(dim=extra_dim)
+        else:
+            images = images.mean(axis=extra_dim)
     elif dim_func == "max":
-        images = images.max(axis=extra_dim)
+        if isinstance(images, torch.Tensor):
+            images = images.amax(dim=extra_dim)
+        else:
+            images = images.max(axis=extra_dim)
     elif dim_func == "middle":
         for dim in extra_dim:
             images = images[...,images.shape[-1]//2]

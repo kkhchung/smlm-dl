@@ -250,6 +250,29 @@ class FittingTrainer(object):
                 else:
                     error = torch.std(param_pred - param_y)
                 tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
+                
+    def profile(self, n_iter=1, **kwargs):
+        self.model.to(self.device)
+        self.loss_function.to(self.device)
+        
+        with torch.profiler.profile(**kwargs) as prof:
+            for i in range(n_iter):
+                # with torch.profiler.record_function("iter {}".format(i)):
+                x, y = next(iter(self.train_data_loader))
+                x = x.to(self.device)
+                # y = y.to(self.device)
+
+                self.optimizer.zero_grad()
+                pred = self.model.call_auto(x, y)
+                loss = self.loss_function(pred, x)
+                loss.backward()
+                self.optimizer.step()
+        
+        print(prof.key_averages(group_by_stack_n=5).table(sort_by="self_cuda_time_total" if (torch.profiler.ProfilerActivity.CUDA in prof.activities) else "cpu_time_total",
+                                        # max_src_column_width=30,
+                                        row_limit=20,
+                                       ))
+        return prof
     
     def save_checkpoint(self, filepath=None):
         state_dict = {

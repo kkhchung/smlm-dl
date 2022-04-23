@@ -6,7 +6,7 @@ from matplotlib import pyplot as plt
 import enum
 import scipy
 from scipy import ndimage, signal
-from . import fileloader, util, zernike
+import fileloader, io, util, zernike
 from skimage import restoration
 
 @enum.unique
@@ -312,10 +312,26 @@ class FourierOpticsPSFDataset(SimulatedPSFDataset):
         return psfs
 
 
-class FileWrapperDataset(BaseDataset):
-    def __init__(self, file_path, file_loader, slices=(slice(None),), stack_to_volume=False, cache=True):
+class FileDataset(BaseDataset):
+    def __init__(self, file_path, 
+                 transform=None,
+                 image_slice=slice(None),
+                 length=None,
+                 file_loader=fileloader.PilImageFileLoader,
+                 slices=(slice(None),), stack_to_volume=False, cache=True):
         super().__init__()
-        self.file = self.load_file(file_path, file_loader=file_loader, slices=slices, stack_to_volume=stack_to_volume, cache=cache)
+        self.file = self.load_file(file_path,
+                                   file_loader=file_loader,
+                                   slices=slices,
+                                   stack_to_volume=stack_to_volume,
+                                   cache=cache)
+        
+        if length is None:
+            self.length = len(self.file)
+        else:
+            self.length = length
+        self.transform = transform
+        self.image_slice = np.arange(len(self.file), dtype=np.int32)[image_slice]
     
     def load_file(self, file_path, file_loader, slices, stack_to_volume, cache):
         file_loaded = file_loader(file_path, slices=slices,
@@ -327,71 +343,40 @@ class FileWrapperDataset(BaseDataset):
         return file_loaded
     
     def __len__(self):
-        return len(self.file)
-    
-    def __getitem__(self, key):
-        return self.file[key], {'id': key}
-
-
-class ResamplingFileWrapperDataset(FileWrapperDataset):
-    # overlap with SingleImageDataset?
-    def __init__(self, file_path, out_size=(64, 64, 64), length=16, #augmentations={},
-                 file_loader=fileloader.PilImageFileLoader, slices=(slice(None),),
-                 stack_to_volume=False, cache=True):
-        super().__init__(file_path=file_path, file_loader=file_loader,
-                        slices=slices, stack_to_volume=stack_to_volume,
-                         cache=cache)
-        
-        self.length = length
-        self.in_size = self.file[0][0].shape
-        self.out_size = [min(out_size[dim], self.in_size[dim]) for dim in range(len(out_size))]
-        
-        if (self.out_size < list(out_size)):
-            print("out_size {} clipped to {}".format(out_size, self.out_size))
-        print(self.in_size, self.out_size)
-    
-    def __len__(self):
         return self.length
     
     def __getitem__(self, key):
-        file_id = np.random.randint(0, len(self.file), dtype=np.int32)
-        shifts = np.asarray([np.random.randint(0, self.in_size[dim] - self.out_size[dim] + 1) for dim in range(len(self.in_size))])
+        file_id = np.random.choice(self.image_slice)
         
-        labels = {'id':file_id, }
-        labels.update({"slice_{}".format(['x','y','z'][i]): shift for i, shift in enumerate(shifts)})
+        img = torch.as_tensor(self.file[file_id])
+        if not self.transform is None:
+            img = self.transform(img)
         
-        slicing = np.stack([shifts, shifts + self.out_size], -1)
-        slicing = tuple([slice(None),] + [slice(a, b) for (a, b) in slicing])
-        
-        return self.file[file_id][slicing], labels
+        return img, {'id': key}
 
 
-class FilePairsDataset(FileWrapperDataset):
-    # overlap with SingleImageDataset?
-    def __init__(self, file_path, target_file_path, #out_size=(64, 64, 64),
+class FilePairsDataset(FileDataset):
+    def __init__(self, file_path, target_file_path,
                  transform=None, target_transform=None,
                  image_slice=slice(None),
-                 length=16, #augmentations={},
+                 length=16,
                  file_loader=fileloader.PilImageFileLoader,
-                 slices=(slice(None),),
-                 stack_to_volume=False, cache=True):
+                 slices=(slice(None),), stack_to_volume=False, cache=True):
         super().__init__(file_path=file_path,
-                         # out_size=out_size, length=length,
                          file_loader=file_loader, slices=slices,
                          stack_to_volume=stack_to_volume,
                          cache=cache)
         
         self.target_is_image = True
-        self.length = length
-        self.target_file = self.load_file(target_file_path, file_loader=file_loader,
-                                          slices=slices, stack_to_volume=stack_to_volume, cache=cache)
+        self.target_file = self.load_file(target_file_path,
+                                          file_loader=file_loader,
+                                          slices=slices,
+                                          stack_to_volume=stack_to_volume,
+                                          cache=cache)
         self.transform = transform
         self.target_transform = target_transform
         
         self.image_slice = np.arange(len(self.file), dtype=np.int32)[image_slice]
-        
-    def __len__(self):
-        return self.length
     
     def __getitem__(self, key):
         file_id = np.random.choice(self.image_slice)
@@ -413,7 +398,7 @@ class FilePairsDataset(FileWrapperDataset):
 def inspect_images(dataset, indices=None):
     if indices is None:
         indices = np.random.choice(len(dataset), min(8, len(dataset)), replace=False)
-    images, labels = zip(*[dataset[i] for i in indices])
+    images, labels = zip(*[(dataset[i][0].detach().cpu().numpy(), dataset[i][1]) for i in indices])
     
     tiled_images, n_col, n_row  = util.tile_images(util.reduce_images_dim(np.stack(images, axis=0)), full_output=True)
     

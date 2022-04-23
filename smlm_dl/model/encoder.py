@@ -196,9 +196,12 @@ class ConvImageEncoderModel(ImageEncoderModel):
     
     
 class UnetEncoderModel(ImageEncoderModel):
-    def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=16, last_out_channels=2, ):
+    def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=16, last_out_channels=2, act_func=nn.ReLU, norm_func=nn.Identity):
         if 2**depth > img_size[0] or 2**depth > img_size[1]:
             raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
+        
+        self.act_func = act_func
+        self.norm_func = norm_func
         
         super().__init__(img_size=img_size, in_channels=in_channels,
                                   last_out_channels=last_out_channels,
@@ -245,13 +248,13 @@ class UnetEncoderModel(ImageEncoderModel):
         return x
     
     def _conv_block(self, in_channels, out_channels):
-        return nn.Sequential(
-            # nn.GroupNorm(in_channels, in_channels),
+        return nn.Sequential(            
+            self.norm_func(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(),
-            # nn.GroupNorm(out_channels, out_channels),
+            self.act_func(),
+            self.norm_func(out_channels, out_channels),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.ReLU(),
+            self.act_func(),
             # nn.Dropout2d(0.5),
         )
     
@@ -270,5 +273,5 @@ class UnetEncoderModel(ImageEncoderModel):
         return nn.Sequential(
             # nn.GroupNorm(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=1, padding=0),
-            nn.ReLU(),
+            self.act_func(),
         )

@@ -10,6 +10,7 @@ import pathlib
 from functools import partial
 import os
 import time
+import inspect, shutil
 
 import numpy as np
 import matplotlib
@@ -92,7 +93,7 @@ class FittingTrainer(object):
                     self.log_params_to_tensorboard(tb_logger, "Training", n_iter, y, self.model.mapped_params)
                     if self.train_data_loader.dataset.target_is_image is True:
                         self.log_images_to_tensorboard(tb_logger, "Training/Ref", n_iter, loss, y[:tb_log_limit_images], pred[:tb_log_limit_images])
-                    
+                    self.log_loss_params_to_tensorboard(tb_logger, "Training", n_iter)
             _t.set_postfix(train_loss=loss.detach().cpu().numpy())
         
         if t is None:
@@ -138,6 +139,7 @@ class FittingTrainer(object):
             self.log_params_to_tensorboard(tb_logger, "Validate", n_iter, y_params, pred_params)
             if self.valid_data_loader.dataset.target_is_image is True:
                 self.log_images_to_tensorboard(tb_logger, "Validate/Ref", n_iter, loss, y[:tb_log_limit_images], pred[:tb_log_limit_images])
+            self.log_loss_params_to_tensorboard(tb_logger, "Validate", n_iter)
         
         if show_images:
             img_limit = 16
@@ -173,7 +175,7 @@ class FittingTrainer(object):
         return loss
         
     def train_and_validate(self, n_epoch=100, training_interval=10, validate_interval=100,
-                           checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=9):
+                           checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=9, backup_source=False):
         """
         
         """
@@ -186,7 +188,7 @@ class FittingTrainer(object):
         self.loss_function.to(self.device)
         
         if True: # always pickle the model on running
-            self.save_model()
+            self.save_model(backup_source=backup_source)
         
         with trange(n_epoch) as t0:
             t1 = tqdm()
@@ -251,6 +253,11 @@ class FittingTrainer(object):
                     error = torch.std(param_pred - param_y)
                 tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
                 
+    def log_loss_params_to_tensorboard(self, tb_logger, label, n_iter):
+        if hasattr(self.loss_function, "saved_scalars"):
+            for key, val in self.loss_function.saved_scalars.items():
+                tb_logger.add_scalar("{}/{}".format(label, key), val, n_iter)    
+                
     def profile(self, n_iter=1, **kwargs):
         self.model.to(self.device)
         self.loss_function.to(self.device)
@@ -287,14 +294,16 @@ class FittingTrainer(object):
         save_path = os.path.join(current_path, "checkpoint.ptc")
         torch.save(state_dict, save_path)
         
-        print("Saved to : {}".format(save_path))
-        for key, val in state_dict.items():
-            if isinstance(val, dict):
-                print("{}: {}".format(key, val.keys()))
-            else:
-                print("{}: {}".format(key, val))
+        print("Epoch {}. Saved to : {}".format(state_dict["epoch"], save_path))
+        # for key, val in state_dict.items():
+        #     if isinstance(val, dict):
+        #         print("{}: {}".format(key, val.keys()))
+        #     else:
+        #         print("{}: {}".format(key, val))
         
     def load_checkpoint(self, filepath):
+        if os.path.isdir(filepath):
+            filepath = os.path.join(filepath, "checkpoint.ptc")
         checkpoint = torch.load(filepath, map_location=self.device)
         
         self.model.load_state_dict(checkpoint.get("model_state_dict"))
@@ -305,19 +314,27 @@ class FittingTrainer(object):
         
         print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))
         print(summary(self.model))
-        print(self.optimizer)
-        print(self.loss_function)
+        # print(self.optimizer)
+        # print(self.loss_function)
         for key, val in checkpoint.items():            
             self.current_state['key'] = val
         print(self.current_state)
         
-    def save_model(self, filepath=None):
+    def save_model(self, filepath=None, backup_source=False):
         current_path = self.current_state["log_path"]
         if not filepath is None:
             current_path = filepath
         save_path = os.path.join(current_path, "model.ptm")
         torch.save(self.model, save_path)
-        print("Saved to : {}".format(save_path))
+        print("Saved model to : {}".format(save_path))
+        
+        save_path = os.path.join(current_path, "loss.ptm")
+        torch.save(self.loss_function, save_path)
+        print("Saved loss model : {}".format(save_path))
+        
+        if backup_source is True:
+            shutil.copy(inspect.getsourcefile(type(self.model)), current_path)
+            shutil.copy(inspect.getsourcefile(type(self.loss_function)), current_path)
         
     def set_logpath(self, label=None):
         current_time = datetime.datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
@@ -330,7 +347,15 @@ class FittingTrainer(object):
         
     @staticmethod
     def from_model_file(filepath, *args, **kwargs):
-        model = torch.load(filepath)
+        if os.path.isdir(filepath):
+            model_path = os.path.join(filepath, "model.ptm")
+            model = torch.load(model_path)
+            loss_func_path = os.path.join(filepath, "loss.ptm")
+            loss_func = torch.load(loss_func_path)
+            kwargs["loss_function"] = loss_func
+        else:
+            model = torch.load(filepath)
+        
         trainer = FittingTrainer(model, *args, **kwargs)
         print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))
         print(summary(model))

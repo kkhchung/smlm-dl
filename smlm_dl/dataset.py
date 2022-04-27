@@ -6,7 +6,8 @@ from matplotlib import pyplot as plt
 import enum
 import scipy
 from scipy import ndimage, signal
-import fileloader, io, util, zernike
+import io
+from . import fileloader, util, zernike
 from skimage import restoration
 
 @enum.unique
@@ -398,7 +399,7 @@ class FilePairsDataset(FileDataset):
 def inspect_images(dataset, indices=None):
     if indices is None:
         indices = np.random.choice(len(dataset), min(8, len(dataset)), replace=False)
-    images, labels = zip(*[(dataset[i][0].detach().cpu().numpy(), dataset[i][1]) for i in indices])
+    images, labels = zip(*[(dataset[i][0].detach().cpu().numpy() if torch.is_tensor(dataset[i][0]) else dataset[i][0], dataset[i][1]) for i in indices])
     
     tiled_images, n_col, n_row  = util.tile_images(util.reduce_images_dim(np.stack(images, axis=0)), full_output=True)
     

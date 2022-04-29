@@ -97,11 +97,11 @@ class DirectMapperModel(BaseMapperModel):
     def generate_params_ref(self, new_params_ref, img_size):
         params_ref = dict()
         params_ref.update({
-            'x': model.FitParameter(nn.Tanh(), 0, 0.75 * img_size[0], 0, True),
-            'y': model.FitParameter(nn.Tanh(), 0, 0.75 * img_size[1], 0, True),
-            'z': model.FitParameter(nn.Tanh(), 0, 2 * np.pi, 0, True),
+            'x': model.FitParameter(nn.Hardtanh(), 0, 1 * img_size[0], 0, True),
+            'y': model.FitParameter(nn.Hardtanh(), 0, 1 * img_size[1], 0, True),
+            'z': model.FitParameter(nn.Hardtanh(), 0, 2 * np.pi, 0, True),
             'A': model.FitParameter(nn.ReLU(), 0, 1000, 1, True),
-            'bg': model.FitParameter(nn.Tanh(), 0, 500, 0, False),
+            'bg': model.FitParameter(nn.Hardtanh(), 0, 500, 0, False),
             'p': model.FitParameter(nn.Sigmoid(), 0, 1, 1, True)
         })
         params_ref.update(new_params_ref)
@@ -240,9 +240,9 @@ class DirectImageMapperModel(DirectMapperModel):
                          max_psf_count=1, new_params_ref=params_ref,
                          params_ref_no_scale=False)
         
-        for mapping in self.mappings:
-            _, module, (channels, _) = mapping
-            module.register_forward_hook(functools.partial(self.save_output_image, label=','.join(channels)))
+        # for mapping in self.mappings:
+        #     _, module, (channels, _) = mapping
+        #     module.register_forward_hook(functools.partial(self.save_output_image, label=','.join(channels)))
         
     def generate_params_ref(self, new_params_ref, img_size):
         params_ref = dict()

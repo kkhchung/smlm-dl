@@ -55,7 +55,7 @@ class FittingTrainer(object):
             self.device = torch.device('cpu')
         print("Device: {}".format(self.device))
         
-    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=9, t=None):
+    def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=9, dict_log=None, t=None):
         self.model.train()
         
         # print("-"*100)
@@ -87,13 +87,16 @@ class FittingTrainer(object):
                 #                                                      len(self.train_data_loader.dataset),
                 #                                                      loss))
 
+                n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
                 if not tb_logger is None:
-                    n_iter = epoch_i * len(self.train_data_loader) + batch_i + 1
-                    self.log_images_to_tensorboard(tb_logger, "Training", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
-                    self.log_params_to_tensorboard(tb_logger, "Training", n_iter, y, self.model.mapped_params)
+                    self.log_images_to_tensorboard(tb_logger, "Training", n_iter, x[:tb_log_limit_images], pred[:tb_log_limit_images])
+                    self.log_params_to_tensorboard(tb_logger, "Training", n_iter, loss, y, self.model.mapped_params)
                     if self.train_data_loader.dataset.target_is_image is True:
-                        self.log_images_to_tensorboard(tb_logger, "Training/Ref", n_iter, loss, y[:tb_log_limit_images], pred[:tb_log_limit_images])
+                        self.log_images_to_tensorboard(tb_logger, "Training/Ref", n_iter, y[:tb_log_limit_images], pred[:tb_log_limit_images])
                     self.log_loss_params_to_tensorboard(tb_logger, "Training", n_iter)
+                if not dict_log is None:
+                    self.log_params_to_dict(dict_log, "Training", n_iter, loss, y, self.model.mapped_params)
+                    self.log_loss_params_to_dict(dict_log, "Training", n_iter)
             _t.set_postfix(train_loss=loss.detach().cpu().numpy())
         
         if t is None:
@@ -104,7 +107,7 @@ class FittingTrainer(object):
         self.current_state['epoch'] = epoch_i
         self.current_state['loss'] = loss
                 
-    def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=9, show_images=True):
+    def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=9, dict_log=None, show_images=True):
         self.model.eval()
         
         sum_loss = 0
@@ -117,16 +120,15 @@ class FittingTrainer(object):
                 pred = self.model.call_auto(x, y)
                 sum_loss += self.loss_function(pred, x)                
                 
-                if self.model.encoder.image_input is False:
-                    for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:
-                        for key, val in new_dict.items():
-                            if key in old_dict:
-                                if val.ndim > 0:
-                                    old_dict[key] = torch.cat([old_dict[key], val])
-                                else:
-                                    old_dict[key] = val # should be identical to the old value
+                for old_dict, new_dict in [(y_params, y), (pred_params, self.model.mapped_params)]:
+                    for key, val in new_dict.items():
+                        if key in old_dict:
+                            if val.ndim > 0:
+                                old_dict[key] = torch.cat([old_dict[key], val])
                             else:
-                                old_dict[key] = val
+                                old_dict[key] = val # should be identical to the old value
+                        else:
+                            old_dict[key] = val
         
         loss = sum_loss / len(self.valid_data_loader)
         
@@ -135,11 +137,15 @@ class FittingTrainer(object):
         # print("*"*100)
         
         if not tb_logger is None:
-            self.log_images_to_tensorboard(tb_logger, "Validate", n_iter, loss, x[:tb_log_limit_images], pred[:tb_log_limit_images])
-            self.log_params_to_tensorboard(tb_logger, "Validate", n_iter, y_params, pred_params)
+            self.log_images_to_tensorboard(tb_logger, "Validate", n_iter, x[:tb_log_limit_images], pred[:tb_log_limit_images])
+            self.log_params_to_tensorboard(tb_logger, "Validate", n_iter, loss, y_params, pred_params)
             if self.valid_data_loader.dataset.target_is_image is True:
-                self.log_images_to_tensorboard(tb_logger, "Validate/Ref", n_iter, loss, y[:tb_log_limit_images], pred[:tb_log_limit_images])
+                self.log_images_to_tensorboard(tb_logger, "Validate/Ref", n_iter, y[:tb_log_limit_images], pred[:tb_log_limit_images])
             self.log_loss_params_to_tensorboard(tb_logger, "Validate", n_iter)
+            
+        if not dict_log is None:
+            self.log_params_to_dict(dict_log, "Validate", n_iter, loss, y_params, pred_params)
+            self.log_loss_params_to_dict(dict_log, "Validate", n_iter)
         
         if show_images:
             img_limit = 16
@@ -175,14 +181,20 @@ class FittingTrainer(object):
         return loss
         
     def train_and_validate(self, n_epoch=100, training_interval=10, validate_interval=100,
-                           checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=9, backup_source=False):
+                           checkpoint_interval=1000, label=None, tb_logger=True, tb_log_limit_images=9,
+                           dict_log=None,
+                           backup_source=False):
         """
         
         """
         self.set_logpath(label)
         
         if tb_logger is True:
-            tb_logger = SummaryWriter(log_dir=self.current_state["log_path"])            
+            tb_logger = SummaryWriter(log_dir=self.current_state["log_path"])
+        
+        if not dict_log is None:
+            dict_log["Training"] = {}
+            dict_log["Validate"] = {}
             
         self.model.to(self.device)
         self.loss_function.to(self.device)
@@ -197,10 +209,11 @@ class FittingTrainer(object):
                 
                 self.train_single_epoch(epoch_i,
                                         tb_logger=tb_logger if (epoch_i % training_interval == 0) else None,
-                                        tb_log_limit_images=tb_log_limit_images, t=t1)
+                                        tb_log_limit_images=tb_log_limit_images, dict_log=dict_log, t=t1)
 
                 if (not self.valid_data_loader is None) and (((epoch_i+1) % validate_interval == 0) or ((epoch_i+1)==n_epoch)):
                     validation_loss = self.validate((epoch_i+1) * len(self.train_data_loader), tb_logger=tb_logger,
+                                                    dict_log=dict_log,
                                                     show_images=(epoch_i+1)==n_epoch, tb_log_limit_images=tb_log_limit_images)
                     t0.set_postfix(val_loss=validation_loss.detach().cpu().numpy())
 
@@ -208,8 +221,8 @@ class FittingTrainer(object):
                     self.save_checkpoint()
             t1.close()
                 
-    def log_images_to_tensorboard(self, tb_logger, label, n_iter, loss, x, pred):
-        tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)
+    def log_images_to_tensorboard(self, tb_logger, label, n_iter, x, pred):
+        # tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)
         x_numpy = x.detach().cpu().numpy()
         x_numpy = util.reduce_images_dim(x_numpy, 'skip')
         pred_numpy = pred.detach().cpu().numpy()
@@ -233,8 +246,8 @@ class FittingTrainer(object):
             if 'images' in suppl_dict:
                 for i, (key, (img, norm, cmap)) in enumerate(suppl_dict['images'].items()):
                     tb_logger.add_image("{}/{}".format(label, key), img, n_iter, dataformats="HWC")
-                
-    def log_params_to_tensorboard(self, tb_logger, label, n_iter, y, pred, params=['x','y','z']):
+                    
+    def log_params_to_func(self, func, label, n_iter, y, pred, params=['x','y','z']):
         for param in params:
             if param in pred and param in y:
                 param_y = y[param].squeeze().detach().to(self.device)
@@ -251,14 +264,52 @@ class FittingTrainer(object):
                     error = error.std()
                 else:
                     error = torch.std(param_pred - param_y)
-                tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
+                func(label, param, error, n_iter)
                 
-    def log_loss_params_to_tensorboard(self, tb_logger, label, n_iter):
+    def log_params_to_tensorboard(self, tb_logger, label, n_iter, loss, y, pred, params=['x','y','z']):
+        tb_logger.add_scalar("{}/loss".format(label), loss, n_iter)
+        
+        def func(label, param, error, n_iter):
+            tb_logger.add_scalar("{}/error_{}".format(label, param), error, n_iter)
+            
+        self.log_params_to_func(func, label, n_iter, y, pred, params=['x','y','z'])
+                
+    def log_params_to_dict(self, dict_log, label, n_iter, loss, y, pred, params=['x','y','z']):
+        
+        if 'loss' in dict_log[label]:
+            dict_log[label]['loss'].append((n_iter, loss.detach()))
+        else:
+            dict_log[label]["loss"]=list()
+        
+        for param in params:
+            if not param in dict_log[label]:
+                dict_log[label][param] = list()                
+        
+        def func(label, param, error, n_iter):
+            dict_log[label][param].append((n_iter, error.detach()))
+            
+        self.log_params_to_func(func, label, n_iter, y, pred, params=['x','y','z'])
+        
+    def log_loss_params_to_func(self, func, label, n_iter):
         if hasattr(self.loss_function, "saved_scalars"):
             for key, val in self.loss_function.saved_scalars.items():
-                tb_logger.add_scalar("{}/{}".format(label, key), val, n_iter)    
+                func(label, key, val, n_iter)
                 
-    def profile(self, n_iter=1, **kwargs):
+    def log_loss_params_to_tensorboard(self, tb_logger, label, n_iter):
+        def func(label, key, val, n_iter):
+            tb_logger.add_scalar("{}/{}".format(label, key), val, n_iter)
+        
+        self.log_loss_params_to_func(func, label, n_iter)
+        
+    def log_loss_params_to_dict(self, dict_log, label, n_iter):
+        def func(label, key, val, n_iter):
+            if not key in dict_log[label]:
+                dict_log[label][key] = list()
+            dict_log[label][key].append((n_iter, val.detach()))
+        
+        self.log_loss_params_to_func(func, label, n_iter)
+                
+    def profile(self, n_iter=1, sort_by=None, **kwargs):
         self.model.to(self.device)
         self.loss_function.to(self.device)
         
@@ -275,9 +326,12 @@ class FittingTrainer(object):
                 loss.backward()
                 self.optimizer.step()
         
-        print(prof.key_averages(group_by_stack_n=5).table(sort_by="self_cuda_time_total" if (torch.profiler.ProfilerActivity.CUDA in prof.activities) else "cpu_time_total",
+        if sort_by is None:
+            sort_by = "self_cuda_time_total" if (torch.profiler.ProfilerActivity.CUDA in prof.activities) else "cpu_time_total"
+        
+        print(prof.key_averages(group_by_stack_n=5).table(sort_by=sort_by,
                                         # max_src_column_width=30,
-                                        row_limit=20,
+                                        row_limit=100,
                                        ))
         return prof
     
@@ -360,3 +414,22 @@ class FittingTrainer(object):
         print("Loaded from {}, last modified: {}".format(filepath, time.ctime(os.path.getmtime(filepath))))
         print(summary(model))
         return trainer
+    
+
+def inspect_dict_log(dict_log, log=False, *arg, **kwarg):
+    ret = list()
+    for key, val in dict_log.items():
+        fig, axes = plt.subplots(1, len(val), figsize=(len(val)*4, 3))
+        ret.append((fig, axes))
+        for i, (key2, val2) in enumerate(val.items()):        
+            data = list(zip(*val2))
+            if len(data) == 2:
+                axes[i].plot(data[0], torch.as_tensor(data[1]).cpu().numpy(), *arg, **kwarg)
+                axes[i].set_ylabel(key2)
+                axes[i].set_xlabel("Iter")
+                if log is True:
+                    axes[i].set_yscale("log")
+        fig.suptitle(key)
+        fig.tight_layout()
+        
+    return ret

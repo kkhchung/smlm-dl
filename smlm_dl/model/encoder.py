@@ -103,9 +103,14 @@ class ImageEncoderModel(BaseEncoderModel):
         
 
 class ConvImageEncoderModel(ImageEncoderModel):
-    def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=16, last_out_channels=2, skip_channels=0,):
+    def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=32, last_out_channels=2, skip_channels=0,
+                 act_func=nn.ReLU, final_act_func=nn.ReLU, norm_func=nn.Identity):
         if 2**depth > img_size[0] or 2**depth > img_size[1]:
             raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
+            
+        self.act_func = act_func
+        self.final_act_func = final_act_func
+        self.norm_func = norm_func
         
         super().__init__(img_size=img_size, in_channels=in_channels,
                                   last_out_channels=last_out_channels,
@@ -155,43 +160,43 @@ class ConvImageEncoderModel(ImageEncoderModel):
     
     def _skip_block(self, in_channels, out_channels, in_shape):
         return nn.Sequential(            
-            nn.GroupNorm(in_channels, in_channels),
+            self.norm_func(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=in_shape, padding=0),
-            nn.GELU(),
-            nn.GroupNorm(out_channels, out_channels),
+            self.act_func(),
+            self.norm_func(out_channels, out_channels),
             nn.Conv2d(out_channels, out_channels, kernel_size=1, padding=0),
-            nn.GELU(),
-            nn.Dropout2d(0.5),
+            self.act_func(),
+            # nn.Dropout2d(0.5),
         )
     
     def _encode_block(self, in_channels, out_channels):
         return nn.Sequential(
-            # nn.GroupNorm(in_channels, in_channels),
+            self.norm_func(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.GELU(),
-            # nn.GroupNorm(out_channels, out_channels),
+            self.act_func(),
+            self.norm_func(out_channels, out_channels),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
-            nn.GELU(),
+            self.act_func(),
             nn.MaxPool2d(2),
-            nn.Dropout2d(0.5),
+            # nn.Dropout2d(0.125),
         )
     
     def _neck_block(self, in_channels, out_channels):
         return nn.Sequential(
-            nn.GroupNorm(in_channels, in_channels),
+            self.norm_func(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
-            nn.GELU(),
-            nn.GroupNorm(out_channels, out_channels),
+            self.act_func(),
+            self.norm_func(out_channels, out_channels),
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             nn.Dropout2d(0.5),
-            nn.GELU(),
+            self.act_func(),
         )
     
     def _encode_final_block(self, in_channels, out_channels, image_shape):
         return nn.Sequential(
-            nn.GroupNorm(in_channels, in_channels),
+            # nn.GroupNorm(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=image_shape, padding=0),
-            nn.GELU(),
+            self.final_act_func(),
         )
     
     

@@ -57,6 +57,7 @@ class FittingTrainer(object):
         
     def train_single_epoch(self, epoch_i=0, log_interval=10, tb_logger=None, tb_log_limit_images=9, dict_log=None, t=None):
         self.model.train()
+        self.loss_function.train()
         
         # print("-"*100)
         # print("Starting training Epoch # {}".format(epoch_i))
@@ -109,6 +110,7 @@ class FittingTrainer(object):
                 
     def validate(self, n_iter=0, tb_logger=None, tb_log_limit_images=9, dict_log=None, show_images=True):
         self.model.eval()
+        self.loss_function.eval()
         
         sum_loss = 0
         y_params = {}
@@ -260,7 +262,7 @@ class FittingTrainer(object):
                         param_pred = param_pred.unsqueeze(-1)
                     pairwise_distances = torch.cdist(param_y, param_pred)
                     sorted_values, indices = torch.sort(pairwise_distances, dim=1)
-                    error = sorted_values[:, :, 0]
+                    error = sorted_values[:, 0, 0]
                     error = error.std()
                 else:
                     error = torch.std(param_pred - param_y)
@@ -279,13 +281,11 @@ class FittingTrainer(object):
         if 'loss' in dict_log[label]:
             dict_log[label]['loss'].append((n_iter, loss.detach()))
         else:
-            dict_log[label]["loss"]=list()
-        
-        for param in params:
-            if not param in dict_log[label]:
-                dict_log[label][param] = list()                
+            dict_log[label]["loss"]=list()                           
         
         def func(label, param, error, n_iter):
+            if not param in dict_log[label]:
+                dict_log[label][param] = list() 
             dict_log[label][param].append((n_iter, error.detach()))
             
         self.log_params_to_func(func, label, n_iter, y, pred, params=['x','y','z'])

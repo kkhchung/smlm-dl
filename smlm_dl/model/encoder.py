@@ -201,9 +201,14 @@ class ConvImageEncoderModel(ImageEncoderModel):
     
     
 class UnetEncoderModel(ImageEncoderModel):
-    def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=16, last_out_channels=2, act_func=nn.ReLU, final_act_func=nn.ReLU, norm_func=nn.Identity):
+    def __init__(self, img_size=(32,32), depth=3, in_channels=1, first_layer_out_channels=16, last_out_channels=2,
+                 dropout_conv=0, dropout_neck=0.5,
+                 act_func=nn.ReLU, final_act_func=nn.ReLU, norm_func=nn.Identity):
         if 2**depth > img_size[0] or 2**depth > img_size[1]:
             raise Exception("Model too deep for this image size (depth = {}, image size needs to be at least ({}, {}))".format(depth, 2**depth, 2**depth))
+        
+        self.dropout_conv = dropout_conv
+        self.dropout_neck = dropout_neck
         
         self.act_func = act_func
         self.final_act_func = final_act_func
@@ -219,11 +224,11 @@ class UnetEncoderModel(ImageEncoderModel):
             in_channels = self.in_channels if i == 0 else 2**(i-1) * first_layer_out_channels
             out_channels = 2**i * first_layer_out_channels
 
-            self.encoders["conv_layer{}".format(i)] = self._conv_block(in_channels, out_channels)
+            self.encoders["conv_layer{}".format(i)] = self._conv_block(in_channels, out_channels, dropout=self.dropout_conv)
             self.encoders["pool_layer{}".format(i)] = self._pool_block(out_channels, out_channels)
             
         self.neck = self._conv_block(int(2**(depth-1) * first_layer_out_channels),
-                                     (2**(depth) * first_layer_out_channels))
+                                     (2**(depth) * first_layer_out_channels), dropout=self.dropout_neck)
         
         self.decoders = nn.ModuleDict()
         for i in range(depth):
@@ -253,7 +258,7 @@ class UnetEncoderModel(ImageEncoderModel):
             
         return x
     
-    def _conv_block(self, in_channels, out_channels):
+    def _conv_block(self, in_channels, out_channels, dropout=0):
         return nn.Sequential(            
             self.norm_func(in_channels, in_channels),
             nn.Conv2d(in_channels, out_channels, kernel_size=3, padding=1),
@@ -262,11 +267,12 @@ class UnetEncoderModel(ImageEncoderModel):
             nn.Conv2d(out_channels, out_channels, kernel_size=3, padding=1),
             self.act_func(),
             # nn.Dropout2d(0.5),
+            nn.Identity() if dropout==0 else nn.Dropout2d(dropout),
         )
     
     def _pool_block(self, in_channels, out_channels):
         return nn.Sequential(
-            nn.Dropout2d(0.5),
+            # nn.Dropout2d(0.5),
             nn.MaxPool2d(2),
         )
     

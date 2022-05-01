@@ -362,7 +362,10 @@ class FittingTrainer(object):
         
         self.model.load_state_dict(checkpoint.get("model_state_dict"))
         self.model.to(self.device)
-        self.loss_function.load_state_dict(checkpoint.get("loss_function_state_dict"))
+        try:
+            self.loss_function.load_state_dict(checkpoint.get("loss_function_state_dict"))
+        except:
+            print("Could not load loss function checkpoint!")
         self.loss_function.to(self.device)
         self.optimizer.load_state_dict(checkpoint.get("optimizer_state_dict"))
         
@@ -405,8 +408,9 @@ class FittingTrainer(object):
             model_path = os.path.join(filepath, "model.ptm")
             model = torch.load(model_path)
             loss_func_path = os.path.join(filepath, "loss.ptm")
-            loss_func = torch.load(loss_func_path)
-            kwargs["loss_function"] = loss_func
+            if os.path.exists(loss_func_path):
+                loss_func = torch.load(loss_func_path)
+                kwargs["loss_function"] = loss_func
         else:
             model = torch.load(filepath)
         

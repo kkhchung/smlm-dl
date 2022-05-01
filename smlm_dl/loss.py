@@ -187,3 +187,131 @@ class GaussPoissonMLECameraLoss(CameraLoss):
             self.cached_images["gaussian_nll_a"] = gaussian_nll_a.detach()
             self.cached_images["gaussian_nll_b"] = gaussian_nll_b
         return gaussian_nll_a + gaussian_nll_b
+
+
+class SelfLimitingLoss(nn.Module):
+    def __init__(self, crop=0, n_inner_iter=(300, 2), delay=100, loss_func=nn.MSELoss):
+        super().__init__()
+        
+        self.crop = crop
+        self.n_inner_iter_first = n_inner_iter[0]
+        self.n_inner_iter_other = n_inner_iter[1]
+        
+        self.signal_model = model.encoder.UnetEncoderModel(img_size=(32,32), depth=4,
+                                                           last_out_channels=1, act_func=nn.GELU,
+                                                           final_act_func=nn.Identity)
+        self.signal_loss_func = loss_func()
+        self.signal_optimizer = torch.optim.AdamW(self.signal_model.parameters(), lr=1e-4)
+        self.register_buffer('blank_ones', torch.ones((512, 1, 32, 32), device='cuda', requires_grad=False))
+        
+        self.noise_model = model.encoder.UnetEncoderModel(img_size=(32,32), depth=4,
+                                                          last_out_channels=1, act_func=nn.GELU,
+                                                          final_act_func=nn.Identity)
+        self.noise_loss_func = loss_func()
+        self.noise_optimizer = torch.optim.AdamW(self.noise_model.parameters(), lr=1e-4)
+        
+        self.loss_func = loss_func()
+        
+        self.error_network_on = -1
+        self.n_outer_iter = 0
+        self.n_outer_iter_delay = delay
+        
+        self.saved_scalars = dict()        
+        
+    def forward(self, input, target):        
+        diff = target - input
+        
+        target_cropped = target[:,:,self.crop:-self.crop,self.crop:-self.crop]
+        input_cropped = input[:,:,self.crop:-self.crop,self.crop:-self.crop]        
+        
+        loss = self.loss_func(target_cropped, input_cropped)
+        
+        if self.error_network_on >= 0:
+            if self.training is True:
+                signal_log, loss_log = list(), list()
+                
+                input_copy = input_cropped.detach()
+                input_copy = input_copy - input_copy.mean()
+                
+                diff_copy = diff.detach()
+                diff_copy = diff_copy[:,:,self.crop:-self.crop,self.crop:-self.crop]
+                
+                self.signal_model.train(True)                
+                for i in range(self.n_inner_iter_first if self.error_network_on==0 else self.n_inner_iter_other):
+                    self.signal_optimizer.zero_grad()
+                    predict_signal = self.signal_model(self.blank_ones)
+                    
+                    predict_signal = predict_signal[:,:,self.crop:-self.crop,self.crop:-self.crop]                    
+                    signal_predict_loss = self.signal_loss_func(input_copy,
+                                                     predict_signal)
+
+                    signal_predict_loss.backward()          
+                    self.signal_optimizer.step()          
+                    signal_log.append(signal_predict_loss.detach())
+                    
+                self.noise_model.train(True)                
+                for i in range(self.n_inner_iter_first if self.error_network_on==0 else self.n_inner_iter_other):
+                    self.noise_optimizer.zero_grad()
+                    predict_diff = self.noise_model(input.detach())
+
+                    predict_diff = predict_diff[:,:,self.crop:-self.crop,self.crop:-self.crop]
+                    diff_predict_loss = self.noise_loss_func(diff_copy,
+                                                     predict_diff)
+
+                    diff_predict_loss.backward()                    
+                    self.noise_optimizer.step()                    
+                    loss_log.append(diff_predict_loss.detach())
+                    
+                self.error_network_on += 1            
+            
+            input_copy = input_cropped
+            diff_copy = diff[:,:,self.crop:-self.crop,self.crop:-self.crop]
+            target_copy = target_cropped
+            target_copy_var = target_copy.var().detach()
+            
+            self.signal_model.train(False)
+            predict_signal = self.signal_model(self.blank_ones)
+            predict_signal = predict_signal[:,:,self.crop:-self.crop,self.crop:-self.crop]
+            signal_predict_loss = self.signal_loss_func(input_copy - input_copy.mean(),
+                                                        predict_signal)
+
+            self.noise_model.train(False)
+            predict_diff = self.noise_model(input)
+            predict_diff = predict_diff[:,:,self.crop:-self.crop,self.crop:-self.crop]        
+            diff_predict_loss = self.noise_loss_func(diff_copy,
+                                                     predict_diff)
+
+            signal_predict_loss = torch.clamp(signal_predict_loss, max=torch.mean(input_copy*input_copy).detach())
+            diff_predict_loss = torch.clamp(diff_predict_loss, max=torch.mean(diff_copy*diff_copy).detach())
+            
+            grand_mean_input = input_copy.mean()**2
+            grand_mean_target = target_copy.mean()**2
+            signal_input = input_copy.var()
+            
+            self.saved_scalars["0_grand_mean_input"] = grand_mean_input
+            self.saved_scalars["0_grand_mean_target"] = grand_mean_target
+            self.saved_scalars["1_signal_input"] = signal_input
+            self.saved_scalars["1_signal_predict"] = signal_predict_loss
+            self.saved_scalars["2_loss"] = loss
+            self.saved_scalars["2_loss_predict"] = diff_predict_loss
+            
+            total_loss = torch.abs(grand_mean_input - grand_mean_target)
+            total_loss = total_loss + signal_input - torch.clamp(signal_predict_loss, max=target_copy_var)
+            total_loss = total_loss + loss - torch.clamp(diff_predict_loss, max=target_copy_var)
+            
+        else:
+            self.saved_scalars["0_grand_mean_input"] = torch.zeros(1)
+            self.saved_scalars["0_grand_mean_target"] = torch.zeros(1)
+            self.saved_scalars["1_signal_input"] = torch.zeros(1)
+            self.saved_scalars["1_signal_predict"] = torch.zeros(1)
+            self.saved_scalars["2_loss"] = loss
+            self.saved_scalars["2_loss_predict"] = torch.zeros(1)
+            
+            total_loss = loss
+        
+        if self.n_outer_iter > self.n_outer_iter_delay and self.error_network_on == -1 and loss < target_cropped.var() * 0.5:
+            self.error_network_on += 1
+        
+        self.n_outer_iter += 1
+        
+        return total_loss
